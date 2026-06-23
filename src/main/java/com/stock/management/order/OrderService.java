@@ -218,6 +218,7 @@ public class OrderService {
                 .scope(scope)
                 .allocations(allocations)
                 .occurredAt(Instant.now())
+				.completeDeliveryRequired(order.isCompleteDeliveryRequired())
                 .build());
     }
 
