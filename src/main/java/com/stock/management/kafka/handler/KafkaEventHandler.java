@@ -55,31 +55,34 @@ public class KafkaEventHandler {
             log.debug("[HANDLER] No allocations to release for orderId={}", event.getOrderId());
             return;
         }
+		if(!event.isCompleteDeliveryRequired()) {
+			// Libérer le stock pour chaque allocation
+			// la liberation doit se passer dans la table stock allocation
+			// tres important a reflechir pour la liberation
+			List<StockReleasedEvent.ReleasedLine> releasedLines = event.getAllocations().stream()
+				.map(alloc -> {
+					skuService.release(new SkuId(alloc.getSkuId()), new Quantity(alloc.getQuantity()));
+					return StockReleasedEvent.ReleasedLine.builder()
+						.sku(alloc.getProductNr())
+						.quantityReleased(alloc.getQuantity())
+						.locationId(alloc.getLocationId())
+						.build();
+				})
+				.toList();
 
-        // Libérer le stock pour chaque allocation
-		// la liberation doit se passer dans la table stock allocation
-		// tres important a reflechir pour la liberation
-        List<StockReleasedEvent.ReleasedLine> releasedLines = event.getAllocations().stream()
-                .map(alloc -> {
-                    skuService.release(new SkuId(alloc.getSkuId()), new Quantity(alloc.getQuantity()));
-                    return StockReleasedEvent.ReleasedLine.builder()
-                            .sku(alloc.getProductNr())
-                            .quantityReleased(alloc.getQuantity())
-                            .locationId(alloc.getLocationId())
-                            .build();
-                })
-                .toList();
 
-        // Publier StockReleasedEvent → déclenche notifyStockAvailable() dans handleStockReleased()
-        kafkaEventPublisher.publishStockReleased(StockReleasedEvent.builder()
-                .eventId(UUID.randomUUID().toString())
-                .orderId(event.getOrderId())
-                .releaseReason(event.getScope().name() + " — " + event.getReason())
-                .releasedLines(releasedLines)
-                .occurredAt(Instant.now())
-                .build());
 
-        log.info("[HANDLER] Released {} allocations for orderId={}", releasedLines.size(), event.getOrderId());
+			// Publier StockReleasedEvent → déclenche notifyStockAvailable() dans handleStockReleased()
+			kafkaEventPublisher.publishStockReleased(StockReleasedEvent.builder()
+				.eventId(UUID.randomUUID().toString())
+				.orderId(event.getOrderId())
+				.releaseReason(event.getScope().name() + " — " + event.getReason())
+				.releasedLines(releasedLines)
+				.occurredAt(Instant.now())
+				.build());
+
+			log.info("[HANDLER] Released {} allocations for orderId={}", releasedLines.size(), event.getOrderId());
+		}
     }
 
     /**
@@ -92,7 +95,7 @@ public class KafkaEventHandler {
 
         event.getReleasedLines().forEach(line -> {
             log.debug("[HANDLER] Notifying retry — productNr={} qty={}", line.getSku(), line.getQuantityReleased());
-            retryService.notifyStockAvailable(line.getSku());
+           // retryService.notifyStockAvailable(line.getSku());
         });
     }
 
