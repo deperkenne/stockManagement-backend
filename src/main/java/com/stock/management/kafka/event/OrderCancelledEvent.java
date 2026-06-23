@@ -23,6 +23,7 @@ public class OrderCancelledEvent {
     private String cancelledBy;
     private CancellationSource cancellationSource;
     private CancellationScope scope; // FULL_ORDER ou SINGLE_LINE
+	private boolean completeDeliveryRequired;
 
     // Allocations à libérer — transmises au consumer pour éviter une requête DB supplémentaire
     private List<CancelledAllocation> allocations;
