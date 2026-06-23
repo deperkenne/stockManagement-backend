@@ -72,7 +72,7 @@ public class SkuService {
     public void release(SkuId skuId, Quantity qty) {
         Sku sku = skuRepository.findByIdForUpdate(skuId)
                 .orElseThrow(() -> new SkuNotFoundException("SKU not found: " + skuId));
-        sku.release(qty);
+        sku.release(qty); // actualisation du stock
         log.info("[SKU] Released qty={} skuId={} available={}",
                 qty.getValue(), skuId, sku.getAvailableQuantity().getValue());
         // Note : le retry est notifié via StockReleasedEvent → handleStockReleased()
