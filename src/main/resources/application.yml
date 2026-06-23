@@ -1,0 +1,130 @@
+spring:
+  application:
+    name: management
+  profiles:
+    active: local
+
+  datasource:
+    # --- CONFIGURATION DU THREADPOOL DE CONNEXIONS (HikariCP) ---
+    hikari:
+      # Nombre maximum de connexions ouvertes en même temps dans le pool
+      maximum-pool-size: 10
+      # Nombre minimum de connexions dormantes gardées ouvertes
+      minimum-idle: 5
+      # Temps max (en ms) qu'un thread attend pour obtenir une connexion du pool avant de crash (ici 3s)
+      connection-timeout: 3000
+      # Temps max qu'une connexion peut rester inactive dans le pool avant d'être fermée
+      idle-timeout: 600000
+      # Durée de vie maximale d'une connexion dans le pool (ici 30 minutes)
+      max-lifetime: 1800000
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/stock_management}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: update        # update = crée les tables si elles n'existent pas, ajoute les colonnes manquantes sans supprimer les données
+    open-in-view: false
+    show-sql: true            # affiche les requêtes SQL dans la console
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+
+    producer:
+      acks: all
+      retries: 3
+      compression-type: snappy
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 1
+        delivery.timeout.ms: 120000
+        request.timeout.ms: 30000
+        linger.ms: 5 # est pour chaque File dans Memory buffer de kafka
+        batch.size: 16384
+        buffer.memory: 33554432 # est un peu comme la liste d'attente ou queue pour les message qui n'ont pas pu etre envoyer a T= 0
+
+    consumer:
+      group-id: ${KAFKA_CONSUMER_GROUP:stock-management-group}
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      max-poll-records: 50 # pour chaque thread 50 prochain message a la suite a partir de l'offset    3 * 50 = 150 message avec 3 thread
+      properties:
+        fetch.min.bytes: 50000 // si les 50000 octect sont atteint avant le fetch.max.wait.time le broker envoie le message au thread specifique
+        fetch.max.wait.ms: 500 // meme si fetch.min.bytes n#est pas atteind et que fetch.max.wait.time est arriver le broker envoi les message au thread destinee
+        max.poll.interval.ms: 300000 // ci apres ce temps passer le thread n'a pas encore fini kafka declenche un Rebalance et declare le thread comme defectueux
+        session.timeout.ms: 30000
+        heartbeat.interval.ms: 10000 // bip envoyer a kafka tte les 10seconde pour  lui dire que tout marche
+        spring.json.trusted.packages: "com.stock.management.kafka.event"
+        spring.json.use.type.headers: true
+
+    listener:
+      type: batch # 👈 INDISPENSABLE pour recevoir la List<ConsumerRecord>
+      ack-mode: manual_immediate
+      concurrency: 3
+      poll-timeout: 3000
+      missing-topics-fatal: false
+
+  consumer:
+    group-id: ${KAFKA_CONSUMER_GROUP:**analytics-group**} # unique pour ce groupe
+    auto-offset-reset: earliest
+    enable-auto-commit: false
+    key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+    max-poll-records: 10 # Réduit si le traitement analytique est lourd
+    properties:
+      fetch.min.bytes: 1
+      fetch.max.wait.ms: 500
+      max.poll.interval.ms: 600000 # Augmenté à 10 min au cas où
+      session.timeout.ms: 30000
+      heartbeat.interval.ms: 10000
+      spring.json.trusted.packages: "**com.analytics.kafka.event**" # package local
+      spring.json.use.type.headers: true
+
+  listener:
+    ack-mode: manual_immediate
+    concurrency: 3 # Garder 3 si votre topic a toujours 3 partitions
+    poll-timeout: 3000
+    missing-topics-fatal: false
+
+    topic:
+      partitions: ${KAFKA_TOPIC_PARTITIONS:3}
+      replication-factor: ${KAFKA_REPLICATION_FACTOR:1}
+
+  mail:
+    host: smtp.gmail.com
+    port: 587
+    username: ${MAIL_USERNAME}
+    password: ${MAIL_PASSWORD}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+          ssl:
+            trust: smtp.gmail.com
+
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          # Spring Security contacte ce endpoint au démarrage pour récupérer la clé publique (JWKS)
+          # et valider la signature de chaque token entrant.
+          # Format : http://<keycloak-host>:<port>/realms/<votre-realm>
+          issuer-uri: ${KEYCLOAK_ISSUER_URI:http://192.168.178.27:8090/realms/orderManagement}
+
+app:
+  security:
+    keycloak:
+      # Doit correspondre exactement au Client ID configuré dans Keycloak
+      # (utilisé pour extraire resource_access.{client-id}.roles)
+      client-id: ${KEYCLOAK_CLIENT_ID:order-management-app}
