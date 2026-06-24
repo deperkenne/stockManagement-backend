@@ -6,10 +6,7 @@ import com.stock.management.kafka.event.StockAllocatedEvent;
 import com.stock.management.kafka.producer.KafkaEventPublisher;
 import com.stock.management.order.OrderRepository;
 import com.stock.management.order.OrderService;
-import com.stock.management.order.domain.OrderId;
-import com.stock.management.order.domain.OrderStatus;
-import com.stock.management.order.domain.Priority;
-import com.stock.management.order.domain.Quantity;
+import com.stock.management.order.domain.*;
 import com.stock.management.sku.SkuRepository;
 import com.stock.management.sku.domain.Sku;
 import lombok.RequiredArgsConstructor;
@@ -35,6 +32,8 @@ public class AllocationService {
     // 1 seul appel DB pour tout le batch → traitement en mémoire → flush unique.
     // Priorité : HIGH consomme le stock avant NORMAL/LOW dans le même batch.
     // Anti-deadlock : findAvailableSkusForAllocationWithLock trie par productNr ASC.
+
+
 
 
     @Transactional
@@ -98,9 +97,168 @@ public class AllocationService {
 
     // ─── Logique d'allocation (partagée batch / unitaire) ─────────────────────────
 
-    private void processOrder(OrderReceivedEvent event, Map<String, List<Sku>> stockMap) {
+	public void processOrder(OrderReceivedEvent event, Map<String, List<Sku>> stockMap) {
+		UUID orderUuid = UUID.fromString(event.getOrderId());
+		OrderId orderIdObj = new OrderId(orderUuid);
 
-        // Vérification tout-ou-rien AVANT toute réservation
+		int totalLines = event.getLines().size();
+		int completelyFailedLines = 0;
+		int partialLines = 0;
+
+		/**
+		 * toutes ses liste doivent etre creer dans des methodes privee afin de respecter le S SOLID
+		 */
+		List<StockAllocatedEvent.AllocatedLine> allocated = new ArrayList<>();
+		List<AllocationFailedEvent.FailedLine> failed = new ArrayList<>();
+		List<String> failedProductNrs = new ArrayList<>();
+
+
+		/**
+		 * Vérification tout-ou-rien AVANT toute réservation
+		 */
+		if (event.isCompleteDeliveryRequired()) {
+			Optional<OrderReceivedEvent.OrderLine> insufficient = event.getLines().stream()
+				.filter(l -> totalAvailable(stockMap.get(l.getSku())) < l.getQuantity().getValue())
+				.findFirst();
+
+			if (insufficient.isPresent()) {
+				OrderReceivedEvent.OrderLine line = insufficient.get();
+				int available = totalAvailable(stockMap.get(line.getSku()));
+				log.warn("[ALLOC] CompleteDelivery impossible — orderId={} productNr={} needed={} available={}",
+					event.getOrderId(), line.getSku(), line.getQuantity(), available);
+
+				/**
+				 * 🟢 CORRECTION 1 : On transforme TOUTES les lignes de la commande en lignes "Échouées"
+				 * Car l'utilisateur doit savoir que l'ensemble de sa commande a été bloqué
+				 */
+				List<AllocationFailedEvent.FailedLine> allFailedLines = event.getLines().stream()
+					.map(orderLine ->  {
+						int avail = totalAvailable(stockMap.get(orderLine.getSku()));
+						/**
+						 * On marque chaque ligne comme non allouée (0) avec le stock actuellement dispo
+						 */
+						return AllocationFailedEvent.FailedLine.builder()
+							.productId(orderLine.getSku())
+							.orderId(orderLine.getOrderId())
+							.requestedQuantity(orderLine.getQuantity())
+							.availableQuantity(avail)
+							.allocatedQuantity(0)
+							.shortageQuantity(0)
+							.build();
+					})
+					.toList();
+
+				publishAllocationFailed(event,
+					allFailedLines,
+					AllocationFailedEvent.FailureReason.INSUFFICIENT_STOCK);
+
+				return;
+			}
+		}
+
+
+		for (OrderReceivedEvent.OrderLine line : event.getLines()) {
+			List<Sku> skus = stockMap.getOrDefault(line.getSku(), List.of());
+			List<LineAllocation> lineAllocs = greedyAllocate(skus, line.getQuantity());
+
+			int totalAllocated = lineAllocs.stream().mapToInt(LineAllocation::qty).sum();
+			int requestedQty = line.getQuantity();
+
+			LineItemId lineIdObj = new LineItemId(UUID.fromString(line.getOrderLineItemId()));
+
+			/**
+			 * CAS 1 : AUCUN STOCK ALLOUÉ (totalAllocated == 0)
+			 */
+			if (totalAllocated == 0) {
+				completelyFailedLines++;
+
+				/**
+				 * Mise à jour BDD : La ligne passe au statut contractuel NOT_ALLOCATED
+				 */
+				orderRepository.updateLineStatus(orderIdObj, lineIdObj, LineItemStatus.NOT_ALLOCATED);
+
+				/**
+				 * Événement : On applique le statut NOT_ALLOCATED puisque l'allocation est un échec total
+				 */
+				allocated.add(StockAllocatedEvent.AllocatedLine.builder()
+					.sku(null)
+					.ProductNr(line.getSku())
+					.allocatedStatus(StockAllocatedEvent.AllocatedStatus.NOT_ALLOCATED)
+					.quantityAllocated(0)
+					.remainingQuantity(requestedQty)
+					.build());
+				continue;
+			}
+
+			/**
+			 * Déduction et réservation du stock physique
+			 */
+			for (LineAllocation la : lineAllocs) {
+				la.sku().reserve(new Quantity(la.qty()));
+				allocated.add(StockAllocatedEvent.AllocatedLine.builder()
+					.sku(la.sku().getId().getValue().toString())
+					.ProductNr(la.sku().getProductNr().getValue())
+					.allocatedStatus(StockAllocatedEvent.AllocatedStatus.ALLOCATED)
+					.quantityAllocated(la.qty())
+					.locationId(la.sku().getLocation().getCode())
+					.build());
+			}
+
+			/**
+			 * CAS 2 : ALLOCATION PARTIELLE (0 < totalAllocated < requestedQty)
+			 */
+			if (totalAllocated < requestedQty) {
+				log.warn("[ALLOC] Partial — orderId={} sku={} needed={} got={}",
+					event.getOrderId(), line.getSku(), requestedQty, totalAllocated);
+
+				partialLines++;
+				int shortage = requestedQty - totalAllocated;
+
+				orderRepository.updateLineStatus(orderIdObj, lineIdObj, LineItemStatus.PARTIALLY_ALLOCATED);
+
+				/**
+				 * On garde WAITING_STOCK ici car c'est un reliquat (attente active d'un réapprovisionnement)
+				 */
+				allocated.add(StockAllocatedEvent.AllocatedLine.builder()
+					.sku(null)
+					.ProductNr(line.getSku())
+					.allocatedStatus(StockAllocatedEvent.AllocatedStatus.WAITING_STOCK)
+					.quantityAllocated(0)
+					.remainingQuantity(shortage)
+					.build());
+
+			}
+			/**
+			 * CAS 3 : ALLOCATION TOTALE (totalAllocated == requestedQty)
+			 */
+			else {
+				orderRepository.updateLineStatus(orderIdObj, lineIdObj, LineItemStatus.FULLY_ALLOCATED);
+			}
+		}
+
+		/**
+		 * MISE À JOUR DU STATUT GLOBAL DE LA COMMANDE
+		 */
+		if (completelyFailedLines == totalLines) {
+			orderRepository.updateOrderStatus(orderIdObj, OrderStatus.ALLOCATION_FAILED);
+		} else if (completelyFailedLines > 0 || partialLines > 0) {
+			orderRepository.updateOrderStatus(orderIdObj, OrderStatus.PARTIALLY_ALLOCATED);
+		} else {
+			orderRepository.updateOrderStatus(orderIdObj, OrderStatus.FULLY_ALLOCATED);
+		}
+
+		/**
+		 * publisched allocation
+		 */
+		publishStockAllocated(event, allocated);
+	}
+
+	/*
+    private void processOrder1(OrderReceivedEvent event, Map<String, List<Sku>> stockMap) {
+		boolean isOneLinePartialAllocated = false ;
+		OrderId orderIdObj = null;
+
+		// Vérification tout-ou-rien AVANT toute réservation
         if (event.isCompleteDeliveryRequired()) {
             Optional<OrderReceivedEvent.OrderLine> insufficient = event.getLines().stream()
                     .filter(l -> totalAvailable(stockMap.get(l.getSku())) < l.getQuantity())
@@ -141,9 +299,9 @@ public class AllocationService {
                 return;
             }
         }
-		/**
-		 * toutes ses liste doivent etre creer dans des methodes privee afin de respecter le S  SOLID
-		 */
+
+		//toutes ses liste doivent etre creer dans des methodes privee afin de respecter le S  SOLID
+
 		List<StockAllocatedEvent.AllocatedLine> allocated = new ArrayList<>();
         List<AllocationFailedEvent.FailedLine> failed = new ArrayList<>();
         List<String> failedProductNrs = new ArrayList<>();
@@ -152,42 +310,81 @@ public class AllocationService {
             List<Sku> skus = stockMap.getOrDefault(line.getSku(), List.of());
             List<LineAllocation> lineAllocs = greedyAllocate(skus, line.getQuantity());
             int totalAllocated = lineAllocs.stream().mapToInt(LineAllocation::qty).sum();
+			int requestedQty = line.getQuantity();
+
+			// 1. Transformation des Strings en UUID, puis en Value Objects
+			UUID orderUuid = UUID.fromString(line.getOrderId());
+			orderIdObj = new OrderId(orderUuid);
+
+			UUID lineUuid = UUID.fromString(line.getOrderLineItemId());
+			LineItemId lineIdObj = new LineItemId(lineUuid);
+
+		    // Extraction du int pour les calculs
             // permet de verifier si une ligne a ete allouer
 			// car toutes les ligne d'une commande peuvent ne pas etre allouer
 			// car pas de stock disponible malgre partialdelevrery
             if (totalAllocated == 0) {
-				int availableQuantity = totalAvailable(stockMap.get(line.getSku()));
-                failed.add(toFailedLine(line, availableQuantity,totalAllocated)); // ligne pas allouer a inserer dans la table de AllocationRetry
-                failedProductNrs.add(line.getSku());
+                isOneLinePartialAllocated
+				// Mise à jour BDD : La ligne passe au statut contractuel NOT_ALLOCATED
+				orderRepository.updateLineStatus(orderIdObj, lineIdObj, LineItemStatus.NOT_ALLOCATED);
+				failed.add(toFailedLine(line, totalAvailable(skus), totalAllocated));
+
+				// Événement : On applique le statut NOT_ALLOCATED puisque l'allocation est un échec total
+				allocated.add(StockAllocatedEvent.AllocatedLine.builder()
+					.sku(null)
+					.ProductNr(line.getSku())
+					.allocatedStatus(StockAllocatedEvent.AllocatedStatus.NOT_ALLOCATED) // Implémenté ici !
+					.quantityAllocated(0)
+					.remainingQuantity(requestedQty)
+					.build());
+				//int availableQuantity = totalAvailable(stockMap.get(line.getSku()));
+                //failed.add(toFailedLine(line, availableQuantity,totalAllocated)); // ligne pas allouer a inserer dans la table de AllocationRetry
                 continue;
             }
 
             for (LineAllocation la : lineAllocs) {
-                la.sku().reserve(new Quantity(la.qty()));
+                la.sku().reserve(new Quantity(la.qty())); // update stock
                 allocated.add(StockAllocatedEvent.AllocatedLine.builder()  // DRY
                         .sku(line.getSku())
+						.ProductNr(la.sku.getProductNr().getValue())
+						.allocatedStatus(StockAllocatedEvent.AllocatedStatus.ALLOCATED)
                         .quantityAllocated(la.qty())
                         .locationId(la.sku().getLocation().getCode())
                         .build());
             }
+
+
 
 			// verifier si une ligne n'a pas totalement ete allouer  dans ce cas insertion de la ligne avec le reste qui n'a pas ete allouer
 			// dans la liste linefailed
             if (totalAllocated < line.getQuantity()) {
                 log.warn("[ALLOC] Partial — orderId={} sku={} needed={} got={}",
                         event.getOrderId(), line.getSku(), line.getQuantity(), totalAllocated); // DRY
-                failed.add(AllocationFailedEvent.FailedLine.builder()
-					.productId(line.getSku())
-					.orderId(line.getOrderId())
-					.requestedQuantity(line.getQuantity())
-					.availableQuantity(totalAllocated)
-					.allocatedQuantity(totalAllocated)
-					.shortageQuantity(line.getQuantity()-totalAllocated)
+                isOneLinePartialAllocated = true;
+                // 2. Appel de vos méthodes
+				orderRepository.updateLineStatus(orderIdObj, lineIdObj, LineItemStatus.PARTIALLY_ALLOCATED);
+                int shortage = requestedQty - totalAllocated;
+                allocated.add(StockAllocatedEvent.AllocatedLine.builder()  // DRY
+					.sku(null)
+					.ProductNr(line.getSku())
+					.allocatedStatus(StockAllocatedEvent.AllocatedStatus.WAITING_STOCK)
+					.quantityAllocated(0)
+					.remainingQuantity(shortage)
 					.build());
-                //failedProductNrs.add(line.getSku());
-
             }
+
+			else{
+
+				orderRepository.updateLineStatus(orderIdObj, lineIdObj, LineItemStatus.FULLY_ALLOCATED);
+			}
         }
+
+		if(isOneLinePartialAllocated) {
+		  orderRepository.updateOrderStatus(orderIdObj, OrderStatus.PARTIALLY_ALLOCATED);
+		}
+		else{
+			orderRepository.updateOrderStatus(orderIdObj, OrderStatus.FULLY_ALLOCATED);
+		}
 
         if (allocated.isEmpty()) {
             publishAllocationFailed(event, failed, AllocationFailedEvent.FailureReason.INSUFFICIENT_STOCK);
@@ -206,6 +403,7 @@ public class AllocationService {
         }
     }
 
+*/
     // ─── Algorithme glouton ───────────────────────────────────────────────────────
 
     private List<LineAllocation> greedyAllocate(List<Sku> skus, int needed) {
@@ -258,6 +456,7 @@ public class AllocationService {
                 .warehouseId(event.getWarehouseId())
                 .allocatedLines(lines)
                 .occurredAt(Instant.now())
+
                 .build());
         log.info("[ALLOC] stock.allocated — orderId={} lines={}", event.getOrderId(), lines.size());
     }
