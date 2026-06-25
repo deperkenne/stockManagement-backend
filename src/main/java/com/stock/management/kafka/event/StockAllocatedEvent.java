@@ -23,13 +23,23 @@ public class StockAllocatedEvent {
     @JsonFormat(shape = JsonFormat.Shape.STRING)
     private Instant occurredAt;
 
+	public enum AllocatedStatus {
+		ALLOCATED,
+		WAITING_STOCK,
+		NOT_ALLOCATED
+	}
+
     @Data
     @Builder
     @NoArgsConstructor
     @AllArgsConstructor
     public static class AllocatedLine {
         private String sku;
+		private String lineItemId;
+		private AllocatedStatus allocatedStatus;
+		private String ProductNr;
         private int quantityAllocated;
+		private int remainingQuantity;
         private String locationId;
     }
 }
