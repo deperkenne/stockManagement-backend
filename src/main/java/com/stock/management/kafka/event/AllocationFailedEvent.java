@@ -18,33 +18,8 @@ import java.util.List;
 @NoArgsConstructor
 @AllArgsConstructor
 public class AllocationFailedEvent {
-
     private String eventId;
     private String orderId;
-    private String warehouseId;
-    private FailureReason failureReason;
-
-    private List<FailedLine> failedLines;
-    private int retryCount;
-
-    @JsonFormat(shape = JsonFormat.Shape.STRING)
-    private Instant occurredAt;
-
-    public enum FailureReason {
-        INSUFFICIENT_STOCK,
-        PARTIAL_STOCK,
-    }
-
-    @Data
-    @Builder
-    @NoArgsConstructor
-    @AllArgsConstructor
-    public static class FailedLine {
-        private String productId;
-		private String orderId;
-        private int requestedQuantity;
-        private int availableQuantity;
-		private int allocatedQuantity;
-		private int shortageQuantity; //miss quantity
-    }
+	@JsonFormat(shape = JsonFormat.Shape.STRING)
+	private Instant occurredAt;
 }

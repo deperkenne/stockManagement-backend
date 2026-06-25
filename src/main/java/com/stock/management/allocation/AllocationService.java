@@ -109,7 +109,7 @@ public class AllocationService {
 		 * toutes ses liste doivent etre creer dans des methodes privee afin de respecter le S SOLID
 		 */
 		List<StockAllocatedEvent.AllocatedLine> allocated = new ArrayList<>();
-		List<AllocationFailedEvent.FailedLine> failed = new ArrayList<>();
+		//List<AllocationFailedEvent.FailedLine> failed = new ArrayList<>();
 		List<String> failedProductNrs = new ArrayList<>();
 
 
@@ -118,7 +118,7 @@ public class AllocationService {
 		 */
 		if (event.isCompleteDeliveryRequired()) {
 			Optional<OrderReceivedEvent.OrderLine> insufficient = event.getLines().stream()
-				.filter(l -> totalAvailable(stockMap.get(l.getSku())) < l.getQuantity().getValue())
+				.filter(l -> totalAvailable(stockMap.get(l.getSku())) < l.getQuantity())
 				.findFirst();
 
 			if (insufficient.isPresent()) {
@@ -127,30 +127,8 @@ public class AllocationService {
 				log.warn("[ALLOC] CompleteDelivery impossible — orderId={} productNr={} needed={} available={}",
 					event.getOrderId(), line.getSku(), line.getQuantity(), available);
 
-				/**
-				 * 🟢 CORRECTION 1 : On transforme TOUTES les lignes de la commande en lignes "Échouées"
-				 * Car l'utilisateur doit savoir que l'ensemble de sa commande a été bloqué
-				 */
-				List<AllocationFailedEvent.FailedLine> allFailedLines = event.getLines().stream()
-					.map(orderLine ->  {
-						int avail = totalAvailable(stockMap.get(orderLine.getSku()));
-						/**
-						 * On marque chaque ligne comme non allouée (0) avec le stock actuellement dispo
-						 */
-						return AllocationFailedEvent.FailedLine.builder()
-							.productId(orderLine.getSku())
-							.orderId(orderLine.getOrderId())
-							.requestedQuantity(orderLine.getQuantity())
-							.availableQuantity(avail)
-							.allocatedQuantity(0)
-							.shortageQuantity(0)
-							.build();
-					})
-					.toList();
 
-				publishAllocationFailed(event,
-					allFailedLines,
-					AllocationFailedEvent.FailureReason.INSUFFICIENT_STOCK);
+				publishAllocationFailed(event);
 
 				return;
 			}
@@ -221,6 +199,7 @@ public class AllocationService {
 				 */
 				allocated.add(StockAllocatedEvent.AllocatedLine.builder()
 					.sku(null)
+					.lineItemId(line.getOrderLineItemId())
 					.ProductNr(line.getSku())
 					.allocatedStatus(StockAllocatedEvent.AllocatedStatus.WAITING_STOCK)
 					.quantityAllocated(0)
@@ -435,16 +414,6 @@ public class AllocationService {
         }
     }
 
-    private AllocationFailedEvent.FailedLine toFailedLine(OrderReceivedEvent.OrderLine line, int avaibleQuantity,int allocatedQuantity) {
-        return AllocationFailedEvent.FailedLine.builder()
-			.productId(line.getSku())
-			.orderId(line.getOrderId())
-			.requestedQuantity(line.getQuantity())
-			.availableQuantity(avaibleQuantity)
-			.allocatedQuantity(allocatedQuantity)
-			.shortageQuantity(avaibleQuantity-allocatedQuantity)
-			.build();
-    }
 
     // ─── Publication ─────────────────────────────────────────────────────────────
 
@@ -461,19 +430,14 @@ public class AllocationService {
         log.info("[ALLOC] stock.allocated — orderId={} lines={}", event.getOrderId(), lines.size());
     }
 
-    private void publishAllocationFailed(OrderReceivedEvent event,
-                                         List<AllocationFailedEvent.FailedLine> failed,
-                                         AllocationFailedEvent.FailureReason reason) {
+    private void publishAllocationFailed(OrderReceivedEvent event
+                                         ) {
         kafkaEventPublisher.publishAllocationFailed(AllocationFailedEvent.builder()
                 .eventId(UUID.randomUUID().toString())
                 .orderId(event.getOrderId())
-                .warehouseId(event.getWarehouseId())
-                .failureReason(reason)
-                .failedLines(failed)
-                .retryCount(0)
                 .occurredAt(Instant.now())
                 .build());
-        log.warn("[ALLOC] allocation.failed — orderId={} reason={}", event.getOrderId(), reason);
+        log.warn("[ALLOC] allocation.failed — orderId={} ", event.getOrderId());
     }
 
     // ─── Type interne ─────────────────────────────────────────────────────────────
