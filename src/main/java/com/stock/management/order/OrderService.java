@@ -90,7 +90,7 @@ public class OrderService {
             );
         }
 
-        if (order.getStatus() == OrderStatus.COMPLETED) {
+        if (order.getStatus() == OrderStatus.FULLY_ALLOCATED) {
             throw new OrderCancellationException("Cannot cancel a completed order: " + orderId);
         }
 
@@ -124,7 +124,7 @@ public class OrderService {
         if (order.getStatus() == OrderStatus.CANCELLED) {
             throw new OrderCancellationException("Order is already fully cancelled: " + orderId);
         }
-        if (order.getStatus() == OrderStatus.COMPLETED) {
+        if (order.getStatus() == OrderStatus.FULLY_ALLOCATED) {
             throw new OrderCancellationException("Cannot cancel a line item on a completed order: " + orderId);
         }
 
@@ -168,6 +168,21 @@ public class OrderService {
     }
 
     // ─── Private helpers ──────────────────────────────────────────────────────────
+
+	@Transactional
+	public void handleCompleteDeliveryFailure(UUID orderId) {
+		log.warn("[ORDER-BACKEND] Triggering complete delivery failure rollback for order: {}", orderId);
+
+		// 1. Mise à jour de TOUTES les lignes à NOT_ALLOCATED en 1 seule requête SQL UPDATE
+		int updatedLines = orderRepository.updateAllLinesStatus(orderId, LineItemStatus.NOT_ALLOCATED);
+
+		// 2. Mise à jour du statut global de la commande à ALLOCATION_FAILED (ou ORDER_FAILED) en 1 seule requête SQL
+		orderRepository.updateOrderStatus(orderId, OrderStatus.ALLOCATION_FAILED);
+
+		log.info("[ORDER-BACKEND] Successfully failed order {} and its {} lines due to Complete Delivery constraint.", orderId, updatedLines);
+	}
+
+
 
     /**
      * Charge l'agrégat Order avec ses lignes et allocations en une seule requête,
@@ -248,6 +263,8 @@ public class OrderService {
 
     private OrderReceivedEvent.OrderLine toOrderLine(LineItem li) {
         return OrderReceivedEvent.OrderLine.builder()
+			    .orderLineItemId(li.getId().getValue().toString())
+			    .orderId(li.getCustomerOrder().getCustomerId())
                 .sku(li.getProductNr().getValue())
                 .quantity(li.getRequestedQty().getValue())
                 .unitPrice(li.getUnitPrice())

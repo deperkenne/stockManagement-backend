@@ -1,8 +1,6 @@
 package com.stock.management.order;
 
-import com.stock.management.order.domain.CustomerOrder;
-import com.stock.management.order.domain.OrderId;
-import com.stock.management.order.domain.OrderStatus;
+import com.stock.management.order.domain.*;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
@@ -19,6 +17,29 @@ public interface OrderRepository extends JpaRepository<CustomerOrder, OrderId> {
     boolean existsByExternalOrderNr(String externalOrderNr);
 
     Optional<CustomerOrder> findByExternalOrderNr(String externalOrderNr);
+
+
+	/**
+	 * Met à jour le statut de toutes les lignes d'une commande spécifique en une seule requête SQL.
+	 * clearAutomatically = true évite les effets de bord avec le cache de premier niveau (Persistence Context).
+	 */
+	@Modifying(clearAutomatically = true, flushAutomatically = true)
+	@Query("UPDATE LineItem l SET l.status = :status WHERE l.orderId = :orderId")
+	int updateAllLinesStatus(@Param("orderId") UUID orderId, @Param("status") LineItemStatus status);
+
+
+
+	@Modifying(clearAutomatically = true, flushAutomatically = true)
+	@Query("UPDATE Order o SET o.status = :status WHERE o.id = :orderId")
+	int updateOrderStatus(@Param("orderId") OrderId orderId, @Param("status") OrderStatus status);
+
+	@Modifying
+	@Query("UPDATE OrderLine l SET l.status = :lineStatus WHERE l.orderId = :orderId AND l.id = :lineId")
+	int updateLineStatus(
+		@Param("orderId") OrderId orderId,
+		@Param("lineId") LineItemId lineId,
+		@Param("lineStatus") LineItemStatus lineItemStatus
+		);
 
     @Modifying
     @Query("UPDATE Order o SET o.status = :status WHERE o.id.value IN :ids")
@@ -41,3 +62,4 @@ public interface OrderRepository extends JpaRepository<CustomerOrder, OrderId> {
             """)
     Optional<CustomerOrder> findByIdWithLineItemsAndAllocationsForUpdate(@Param("id") OrderId id);
 }
+
