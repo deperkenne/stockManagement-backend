@@ -108,7 +108,7 @@ public class CustomerOrder {
     // ─── Business methods ─────────────────────────────────────────────────────────
 
     public boolean isCancellable() {
-        return status != OrderStatus.CANCELLED && status != OrderStatus.COMPLETED;
+        return status != OrderStatus.CANCELLED && status != OrderStatus.FULLY_ALLOCATED;
     }
 
     /** Retrouve une ligne de commande par son ID — utile pour la validation côté service. */
@@ -118,7 +118,7 @@ public class CustomerOrder {
 
     /** Annule toute la commande — toutes les lignes non encore annulées sont annulées. */
     public void cancel(CancellationSource source) {
-        if (this.status == OrderStatus.COMPLETED) {
+        if (this.status == OrderStatus.FULLY_ALLOCATED) {
             throw new IllegalStateException("Cannot cancel a completed order: " + id);
         }
         this.status = OrderStatus.CANCELLED;

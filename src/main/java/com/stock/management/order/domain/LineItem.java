@@ -57,14 +57,7 @@ public class LineItem {
         return li;
     }
 
-    public void addAllocation(String locationId, Quantity qty, UUID skuId) {
-        StockAllocation allocation = StockAllocation.create(this, locationId, qty, skuId);
-        allocations.add(allocation);
-        allocatedQty = allocatedQty.add(qty);
-        status = allocatedQty.isFullyAllocated(requestedQty)
-                ? LineItemStatus.FULLY_ALLOCATED
-                : LineItemStatus.PARTIALLY_ALLOCATED;
-    }
+
 
     public boolean isCancellable() {
         return status != LineItemStatus.CANCELLED;

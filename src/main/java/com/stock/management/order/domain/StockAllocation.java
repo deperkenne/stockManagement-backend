@@ -35,7 +35,11 @@ public class StockAllocation {
     @Column(name = "allocated_at", nullable = false)
     private Instant allocatedAt;
 
-    public static StockAllocation create(LineItem lineItem, String locationId, Quantity allocatedQty, UUID skuId) {
+	@Enumerated(EnumType.STRING)
+	@Column(name = "status", nullable = false, length = 30)
+	private AllocationStatus allocationStatus;
+
+    public static StockAllocation create(LineItem lineItem, String locationId, Quantity allocatedQty, UUID skuId,AllocationStatus allocationStatus) {
         StockAllocation allocation = new StockAllocation();
         allocation.id = AllocationId.generate();
         allocation.lineItem = lineItem;
@@ -43,6 +47,7 @@ public class StockAllocation {
         allocation.skuId = skuId;
         allocation.allocatedQty = allocatedQty;
         allocation.allocatedAt = Instant.now();
+		allocation.allocationStatus = allocationStatus;
         return allocation;
     }
 }
