@@ -1,8 +1,10 @@
 package com.stock.management.kafka.handler;
 
 import com.stock.management.allocation.AllocationService;
+import com.stock.management.allocationLine.AllocationItemService;
 import com.stock.management.kafka.event.*;
 import com.stock.management.kafka.producer.KafkaEventPublisher;
+import com.stock.management.order.OrderService;
 import com.stock.management.order.domain.Quantity;
 import com.stock.management.sku.SkuService;
 import com.stock.management.sku.domain.SkuId;
@@ -22,6 +24,8 @@ public class KafkaEventHandler {
     private final AllocationService allocationService;
     //private final AllocationRetryService retryService;
     private final SkuService skuService;
+	private final OrderService orderService;
+	private final AllocationItemService allocationItemService;
     private final KafkaEventPublisher kafkaEventPublisher;
 
     public void handleOrderReceived(OrderReceivedEvent event) {
@@ -41,6 +45,7 @@ public class KafkaEventHandler {
         log.info("[HANDLER] stock.allocated orderId={} lines={}",
                 event.getOrderId(), event.getAllocatedLines().size());
         // TODO: confirm order status, notify downstream ERP
+		allocationItemService.onStockAllocated(event);
     }
 
     /**
@@ -106,8 +111,10 @@ public class KafkaEventHandler {
     }
 
     public void handleAllocationFailed(AllocationFailedEvent event) {
-        log.warn("[HANDLER] allocation.failed orderId={} reason={} retryCount={}",
-                event.getOrderId(), event.getFailureReason(), event.getRetryCount());
+        log.warn("[HANDLER] allocation.failed orderId={} ",
+                event.getOrderId());
+		orderService.handleCompleteDeliveryFailure(UUID.fromString(event.getOrderId()));
+
     }
 
     public void handleSkuSubstituted(SkuSubstitutedEvent event) {
