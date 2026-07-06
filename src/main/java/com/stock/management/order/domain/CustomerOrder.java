@@ -1,5 +1,6 @@
 package com.stock.management.order.domain;
 
+import com.stock.management.kafka.event.OrderReceivedEvent;
 import com.stock.management.order.dto.LineItemRequest;
 import jakarta.persistence.*;
 import lombok.AccessLevel;
@@ -8,9 +9,7 @@ import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Optional;
+import java.util.*;
 
 /**
  * ordercancelation consomme via une requette API POst duclient
@@ -106,6 +105,76 @@ public class CustomerOrder {
     }
 
     // ─── Business methods ─────────────────────────────────────────────────────────
+
+	/**
+	 * Modifie le statut des lignes spécifiées vers CANCELLED.
+	 * Cette méthode fait confiance à la liste filtrée en amont.
+	 *
+	 * @param targetsToCancel Liste des IDs des lignes à annuler.
+	 */
+	public void cancelLines(List<LineItemId> targetsToCancel) {
+		if (targetsToCancel == null || targetsToCancel.isEmpty()) {
+			return;
+		}
+
+		// Transformation en Set pour optimiser la recherche (.contains en O(1) au lieu de O(N))
+		Set<LineItemId> targetSet = new HashSet<>(targetsToCancel);
+
+		this.lineItems.stream()
+			.filter(line -> targetSet.contains(line.getId()))
+			.forEach(LineItem::cancel); // Délégation de la mutation à l'objet de transition (OrderLine)
+	}
+
+
+
+	/**
+	 * Re-calcule de manière chirurgicale le statut global de la commande
+	 * en fonction de l'état actuel de TOUTES ses lignes.
+	 */
+	public void evaluateAndModifyGlobalStatus() {
+		// 1. Compte le nombre de lignes par statut
+		long totalLines = this.lineItems.size();
+
+		long cancelledLines = this.lineItems.stream()
+			.filter(line -> line.getStatus() == LineItemStatus.CANCELLED)
+			.count();
+
+		long fullyAllocatedLines = this.lineItems.stream()
+			.filter(line -> line.getStatus() == LineItemStatus.FULLY_ALLOCATED)
+			.count();
+
+		// 2. Machine à états (State Machine) comportementale
+		if (cancelledLines == totalLines) {
+			this.status = OrderStatus.CANCELLED; // Toutes les lignes sont annulées
+		} else if (fullyAllocatedLines + cancelledLines == totalLines) {
+			this.status = OrderStatus.FULLY_ALLOCATED; // Le reste est 100% alloué
+		} else if (cancelledLines > 0) {
+			this.status = OrderStatus.PARTIALLY_ALLOCATED; // Mutation naturelle suite à l'annulation partielle
+		}
+		// Tu peux rajouter tes autres règles ici sans impacter tes services
+	}
+
+
+	/**
+	 * C'est l'entité qui prend la responsabilité complète du filtrage métier.
+	 * Elle prend les IDs bruts et extrait uniquement ceux qui sont éligibles.
+	 */
+	public List<LineItemId> extractEligibleLineIdsForCancellation(List<UUID> requestedUuids) {
+
+
+		return requestedUuids.stream()
+			.map(LineItemId::new)
+			.filter(this::isLineEligibleForCancellation) // Utilise la règle interne
+			.toList();
+	}
+
+	private boolean isLineEligibleForCancellation(LineItemId lineItemId) {
+		return this.lineItems.stream()
+			.filter(line -> line.getId().equals(lineItemId))
+			.findFirst()
+			.map(line -> line.getStatus() != LineItemStatus.CANCELLED)
+			.orElse(false);
+	}
 
     public boolean isCancellable() {
         return status != OrderStatus.CANCELLED && status != OrderStatus.FULLY_ALLOCATED;

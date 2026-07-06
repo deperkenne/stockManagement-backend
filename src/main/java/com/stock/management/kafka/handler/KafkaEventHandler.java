@@ -1,13 +1,13 @@
 package com.stock.management.kafka.handler;
 
+import com.stock.management.allocation.AllocationRetryService;
 import com.stock.management.allocation.AllocationService;
 import com.stock.management.allocationLine.AllocationItemService;
 import com.stock.management.kafka.event.*;
 import com.stock.management.kafka.producer.KafkaEventPublisher;
 import com.stock.management.order.OrderService;
-import com.stock.management.order.domain.Quantity;
+import com.stock.management.order.domain.OrderId;
 import com.stock.management.sku.SkuService;
-import com.stock.management.sku.domain.SkuId;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -22,7 +22,7 @@ import java.util.UUID;
 public class KafkaEventHandler {
 
     private final AllocationService allocationService;
-    //private final AllocationRetryService retryService;
+    private final AllocationRetryService allocationRetryService;
     private final SkuService skuService;
 	private final OrderService orderService;
 	private final AllocationItemService allocationItemService;
@@ -60,34 +60,26 @@ public class KafkaEventHandler {
             log.debug("[HANDLER] No allocations to release for orderId={}", event.getOrderId());
             return;
         }
-		if(!event.isCompleteDeliveryRequired()) {
-			// Libérer le stock pour chaque allocation
-			// la liberation doit se passer dans la table stock allocation
-			// tres important a reflechir pour la liberation
-			List<StockReleasedEvent.ReleasedLine> releasedLines = event.getAllocations().stream()
-				.map(alloc -> {
-					skuService.release(new SkuId(alloc.getSkuId()), new Quantity(alloc.getQuantity()));
-					return StockReleasedEvent.ReleasedLine.builder()
-						.sku(alloc.getProductNr())
-						.quantityReleased(alloc.getQuantity())
-						.locationId(alloc.getLocationId())
-						.build();
-				})
-				.toList();
 
+        handleStockReleased(toStockReleasedEvent(event));
+    }
 
+    private StockReleasedEvent toStockReleasedEvent(OrderCancelledEvent event) {
+        List<StockReleasedEvent.ReleasedLine> lines = event.getAllocations().stream()
+            .map(a -> StockReleasedEvent.ReleasedLine.builder()
+                .sku(a.getSkuId().toString())
+                .ProductNr(a.getProductNr())
+                .quantityAllocated(a.getQuantity())
+                .locationId(a.getLocationId())
+                .build())
+            .toList();
 
-			// Publier StockReleasedEvent → déclenche notifyStockAvailable() dans handleStockReleased()
-			kafkaEventPublisher.publishStockReleased(StockReleasedEvent.builder()
-				.eventId(UUID.randomUUID().toString())
-				.orderId(event.getOrderId())
-				.releaseReason(event.getScope().name() + " — " + event.getReason())
-				.releasedLines(releasedLines)
-				.occurredAt(Instant.now())
-				.build());
-
-			log.info("[HANDLER] Released {} allocations for orderId={}", releasedLines.size(), event.getOrderId());
-		}
+        return StockReleasedEvent.builder()
+            .eventId(UUID.randomUUID().toString())
+            .orderId(event.getOrderId())
+            .releasedLines(lines)
+            .occurredAt(Instant.now())
+            .build();
     }
 
     /**
@@ -97,14 +89,12 @@ public class KafkaEventHandler {
     public void handleStockReleased(StockReleasedEvent event) {
         log.info("[HANDLER] stock.released orderId={} lines={}",
                 event.getOrderId(), event.getReleasedLines().size());
-
-        event.getReleasedLines().forEach(line -> {
-            log.debug("[HANDLER] Notifying retry — productNr={} qty={}", line.getSku(), line.getQuantityReleased());
-           // retryService.notifyStockAvailable(line.getSku());
-        });
+        skuService.releaseBulkStock(event);
+        allocationRetryService.retryPendingOrders(event);
     }
 
     public void handleSkuCorrected(SkuCorrectedEvent event) {
+
         log.info("[HANDLER] sku.corrected orderId={} {} -> {}",
                 event.getOrderId(), event.getOldSku(), event.getCorrectedSku());
         // TODO: re-run allocation with corrected SKU
@@ -113,8 +103,7 @@ public class KafkaEventHandler {
     public void handleAllocationFailed(AllocationFailedEvent event) {
         log.warn("[HANDLER] allocation.failed orderId={} ",
                 event.getOrderId());
-		orderService.handleCompleteDeliveryFailure(UUID.fromString(event.getOrderId()));
-
+		orderService.handleCompleteDeliveryFailure(new OrderId(UUID.fromString(event.getOrderId())));  // before we send request to a db check if this order already exist
     }
 
     public void handleSkuSubstituted(SkuSubstitutedEvent event) {

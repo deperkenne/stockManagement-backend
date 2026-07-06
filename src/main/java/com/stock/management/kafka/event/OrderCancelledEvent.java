@@ -19,6 +19,7 @@ public class OrderCancelledEvent {
     private String eventId;
     private String orderId;
     private String customerId;
+	private String status;
     private String reason;
     private String cancelledBy;
     private CancellationSource cancellationSource;
@@ -39,6 +40,7 @@ public class OrderCancelledEvent {
     @AllArgsConstructor
     public static class CancelledAllocation {
         private UUID skuId;
+		private String status;
         private String locationId;
         private String productNr;
         private int quantity;

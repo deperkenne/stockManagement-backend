@@ -17,8 +17,8 @@ public class StockReleasedEvent {
 
     private String eventId;
     private String orderId;
-    private String warehouseId;
-    private String releaseReason;
+    //private String warehouseId;
+    //private String releaseReason;
     private List<ReleasedLine> releasedLines;
 
     @JsonFormat(shape = JsonFormat.Shape.STRING)
@@ -29,8 +29,12 @@ public class StockReleasedEvent {
     @NoArgsConstructor
     @AllArgsConstructor
     public static class ReleasedLine {
-        private String sku;
-        private int quantityReleased;
-        private String locationId;
+		private String sku;
+		private String lineItemId;
+		//private StockAllocatedEvent.AllocatedStatus allocatedStatus;
+		private String ProductNr;
+		private int quantityAllocated;
+		private int remainingQuantity;
+		private String locationId;
     }
 }

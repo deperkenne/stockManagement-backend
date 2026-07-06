@@ -1,14 +1,13 @@
 package com.stock.management.order.domain;
 
+import com.stock.management.kafka.event.OrderReceivedEvent;
 import jakarta.persistence.*;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.UUID;
+import java.util.*;
 
 @Entity
 @Table(name = "line_items")
@@ -42,8 +41,6 @@ public class LineItem {
     @Column(name = "status", nullable = false, length = 30)
     private LineItemStatus status;
 
-    @OneToMany(mappedBy = "lineItem", cascade = CascadeType.ALL, orphanRemoval = true) // mettons en lazy pour eviter de le charger pour question de performence
-    private List<StockAllocation> allocations = new ArrayList<>();
 
     static LineItem create(CustomerOrder order, ProductNr productNr, Quantity requestedQty, BigDecimal unitPrice) {
         LineItem li = new LineItem();

@@ -10,6 +10,7 @@ import org.springframework.data.repository.query.Param;
 
 import jakarta.persistence.LockModeType;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 public interface SkuRepository extends JpaRepository<Sku, SkuId> {
@@ -55,4 +56,5 @@ public interface SkuRepository extends JpaRepository<Sku, SkuId> {
             ORDER BY s.productNr.value ASC, s.availableQuantity.value DESC
             """)
     List<Sku> findAvailableSkusForAllocationWithLock(@Param("skuCodes") List<String> skuCodes);
+
 }

@@ -1,5 +1,6 @@
 package com.stock.management.sku;
 
+import com.stock.management.kafka.event.StockReleasedEvent;
 import com.stock.management.order.domain.ProductNr;
 import com.stock.management.order.domain.Quantity;
 import com.stock.management.sku.domain.Sku;
@@ -8,21 +9,76 @@ import com.stock.management.sku.dto.CreateSkuRequest;
 import com.stock.management.sku.dto.SkuResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
-@Transactional
+@Transactional(readOnly = true)
 public class SkuService {
 
     private final SkuRepository skuRepository;
-    //private final AllocationRetryService allocationRetryService;
 
+    private record SkuLocationKey(String sku, String locationId) {}
+	private final JdbcTemplate jdbcTemplate;
+
+
+	private int[][] incrementAvailableStockInBatch(Map<SkuLocationKey, Integer> stockToRelease) {
+		String sql = "UPDATE stock SET available_quantity = available_quantity + ? WHERE sku = ? AND location_id = ?";
+		return jdbcTemplate.batchUpdate(sql,
+			stockToRelease.entrySet(),
+			stockToRelease.size(),
+			(ps, entry) -> {
+				ps.setInt(1, entry.getValue());
+				ps.setString(2, entry.getKey().sku());
+				ps.setString(3, entry.getKey().locationId());
+			}
+		);
+	}
+
+	@Transactional // 🔴 INDISPENSABLE pour garantir le ROLLBACK global en cas de violation d'intégrité
+	public void releaseBulkStock(StockReleasedEvent event) {
+		if (event == null) return;
+		List<StockReleasedEvent.ReleasedLine> lines = event.getReleasedLines();
+		if (lines == null || lines.isEmpty()) return;
+
+		log.info("[STOCK-SERVICE] Batch stock release for order: {}", event.getOrderId());
+		/**
+		 * very well performence strategy
+		 * grouping records  by  unique key , to perform only a single update per row
+		 * and jdbTemplate.batchUpdate is the most effecient  approach  in spring for processing large  volumes of Data
+		 *
+		 */
+		Map<SkuLocationKey, Integer> stockToRelease = lines.stream()
+			.collect(Collectors.groupingBy(
+				line -> new SkuLocationKey(line.getSku(), line.getLocationId()),
+				Collectors.summingInt(StockReleasedEvent.ReleasedLine::getQuantityAllocated)
+			));
+
+		int[][] result = incrementAvailableStockInBatch(stockToRelease);
+
+		boolean integrityViolation = Arrays.stream(result)
+			.flatMapToInt(Arrays::stream)
+			.anyMatch(r -> r == 0);
+		if (integrityViolation) {
+			log.error("[CRITICAL] Inventory integrity violation during batch release for order: {}", event.getOrderId());
+			throw new IllegalStateException("Batch stock release failed: unmatched stock row.");
+		}
+
+		log.info("[STOCK-SERVICE] Released stock for {} distinct locations.", stockToRelease.size());
+	}
+
+
+
+    @Transactional
     public SkuResponse createSku(CreateSkuRequest request) {
         // Un même produit peut exister dans plusieurs emplacements.
         // Ce qui est interdit : le même produit dans le MÊME emplacement.
@@ -43,7 +99,7 @@ public class SkuService {
         return toResponse(sku);
     }
 
-    @Transactional(readOnly = true)
+
     public SkuResponse findById(UUID id) {
         SkuId skuId = new SkuId(id);
         return skuRepository.findById(skuId)
@@ -51,7 +107,6 @@ public class SkuService {
                 .orElseThrow(() -> new SkuNotFoundException("SKU not found: " + id));
     }
 
-    @Transactional(readOnly = true)
     public List<SkuResponse> findByProductNr(String productNr) {
         List<Sku> skus = skuRepository.findByProductNr(new ProductNr(productNr));
         if (skus.isEmpty()) {

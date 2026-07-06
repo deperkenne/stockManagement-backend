@@ -52,4 +52,9 @@ public class AllocationItem {
 		@Column(name = "allocated_at", nullable = false)
 		private Instant allocatedAt;
 
+		// 🟢 L'ATTRIBUT DE SOFT DELETE
+		@Column(name = "deleted", nullable = false)
+		@Builder.Default
+		private boolean deleted = false;
+
 }

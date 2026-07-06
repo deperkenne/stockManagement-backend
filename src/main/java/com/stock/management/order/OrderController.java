@@ -1,5 +1,6 @@
 package com.stock.management.order;
 
+import com.stock.management.order.domain.OrderId;
 import com.stock.management.order.dto.*;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -26,7 +27,7 @@ public class OrderController {
 
     /** Annule toute la commande et libère tout le stock alloué. */
     @PostMapping("/{orderId}/cancel")
-    public CancelOrderResponse cancelOrder(@PathVariable UUID orderId,
+    public CancelOrderResponse cancelOrder(@PathVariable OrderId orderId,
                                             @Valid @RequestBody CancelOrderRequest request) {
         log.info("[REST] POST /api/orders/{}/cancel by={}", orderId, request.cancelledBy());
         return orderService.cancelOrder(orderId, request);
@@ -35,9 +36,9 @@ public class OrderController {
     /** Annule une seule ligne et libère uniquement le stock alloué à cette ligne. */
     @PostMapping("/{orderId}/lines/{lineItemId}/cancel")
     public CancelOrderResponse cancelLineItem(@PathVariable UUID orderId,
-                                               @PathVariable UUID lineItemId,
+
                                                @Valid @RequestBody CancelOrderRequest request) {
-        log.info("[REST] POST /api/orders/{}/lines/{}/cancel by={}", orderId, lineItemId, request.cancelledBy());
-        return orderService.cancelLineItem(orderId, lineItemId, request);
+        log.info("[REST] POST /api/orders/{}/lines/{}/cancel by={}", orderId, request.cancelledBy());
+        return orderService.cancelLineItems(orderId,  request);
     }
 }

@@ -1,30 +1,44 @@
 package com.stock.management.order;
 
+import com.stock.management.allocationLine.AllocationItem;
+import com.stock.management.allocationLine.AllocationItemRepository;
+import com.stock.management.allocationLine.AllocationItemStatus;
 import com.stock.management.kafka.event.OrderCancelledEvent;
 import com.stock.management.kafka.event.OrderReceivedEvent;
+import com.stock.management.kafka.event.StockReleasedEvent;
 import com.stock.management.kafka.producer.KafkaEventPublisher;
 import com.stock.management.order.domain.*;
 import com.stock.management.order.dto.*;
 import com.stock.management.order.internal.OrderValidator;
+import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
+
+import static com.stock.management.kafka.config.KafkaTopics.ALLOCATION_FAILED;
+import static com.stock.management.order.domain.OrderStatus.CANCELLED;
+import static com.stock.management.order.domain.OrderStatus.PARTIALLY_ALLOCATED;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
-@Transactional
+@Transactional(readOnly = true)
 public class OrderService {
 
     private final OrderRepository orderRepository;
+	private final AllocationItemRepository allocationItemRepository;
     private final KafkaEventPublisher kafkaEventPublisher;
     private final OrderValidator orderValidator;
+
 
     @Transactional
     public boolean orderChangeStatus(List<OrderId> orderIds, OrderStatus newStatus) {
@@ -36,6 +50,7 @@ public class OrderService {
         log.info("[BATCH STATUS] Updated {} orders to status {}", rowsUpdated, newStatus);
         return rowsUpdated == orderIds.size();
     }
+
 
     // ─── Création ─────────────────────────────────────────────────────────────────
 
@@ -74,115 +89,177 @@ public class OrderService {
 
     // ─── Annulation commande complète ─────────────────────────────────────────────
 
-    public CancelOrderResponse cancelOrder(UUID orderId, CancelOrderRequest request) {
-        // Lock pessimiste : empêche deux annulations concurrentes sur la même commande
-        CustomerOrder order = loadOrderForCancellation(orderId);
-
-        // Idempotence : commande déjà annulée → répondre 200 sans rien refaire
-        if (order.getStatus() == OrderStatus.CANCELLED) {
-            log.info("[ORDER] cancelOrder — already cancelled, orderId={}", orderId);
-            return new CancelOrderResponse(
-                    orderId.toString(),
-                    OrderStatus.CANCELLED.name(),
-                    0,
-                    order.getCancellationSource() != null ? order.getCancellationSource().name() : null,
-                    order.getCancelledAt()
-            );
-        }
-
-        if (order.getStatus() == OrderStatus.FULLY_ALLOCATED) {
-            throw new OrderCancellationException("Cannot cancel a completed order: " + orderId);
-        }
-
-        // Collecter les allocations AVANT d'annuler — les lignes encore actives ont du stock alloué
-        List<OrderCancelledEvent.CancelledAllocation> allocations =
-                collectAllocations(order.getLineItems(), null);
-
-        order.cancel(request.cancellationSource());
-
-		// a revoire maxi 3 parameters
-        publishOrderCancelledEvent(order, allocations, request, OrderCancelledEvent.CancellationScope.FULL_ORDER);
-
-        log.info("[ORDER] Cancelled orderId={} source={} releasedAllocations={}",
-                orderId, request.cancellationSource(), allocations.size());
-
-        return new CancelOrderResponse(
-                orderId.toString(),
-                OrderStatus.CANCELLED.name(),
-                allocations.size(),
-                request.cancellationSource().name(),
-                order.getCancelledAt()
-        );
-    }
-
-    // ─── Annulation d'une seule ligne ─────────────────────────────────────────────
-
-    public CancelOrderResponse cancelLineItem(UUID orderId, UUID lineItemId, CancelOrderRequest request) {
-        // Lock pessimiste : empêche modification concurrente pendant l'annulation
-        CustomerOrder order = loadOrderForCancellation(orderId);
-
-        if (order.getStatus() == OrderStatus.CANCELLED) {
-            throw new OrderCancellationException("Order is already fully cancelled: " + orderId);
-        }
-        if (order.getStatus() == OrderStatus.FULLY_ALLOCATED) {
-            throw new OrderCancellationException("Cannot cancel a line item on a completed order: " + orderId);
-        }
-
-        LineItemId lid = new LineItemId(lineItemId);
-
-        // Validation explicite : ligne introuvable → 404 ciblé
-        LineItem lineItem = order.findLineItem(lid)
-                .orElseThrow(() -> new LineItemNotFoundException(
-                        "LineItem not found: " + lineItemId + " on order: " + orderId));
-
-        // Idempotence : ligne déjà annulée → répondre 200 sans rien refaire
-        if (!lineItem.isCancellable()) {
-            log.info("[ORDER] cancelLineItem — already cancelled, orderId={} lineItemId={}", orderId, lineItemId);
-            return new CancelOrderResponse(
-                    orderId.toString(),
-                    order.getStatus().name(),
-                    0,
-                    null,
-                    order.getCancelledAt()
-            );
-        }
-
-        // Collecter AVANT d'annuler — la ligne a encore son stock alloué
-        List<OrderCancelledEvent.CancelledAllocation> allocations =
-                collectAllocations(order.getLineItems(), lid);
-
-        order.cancelLineItem(lid, request.cancellationSource());
-
-        publishOrderCancelledEvent(order, allocations, request, OrderCancelledEvent.CancellationScope.SINGLE_LINE);
-
-        log.info("[ORDER] LineItem cancelled orderId={} lineItemId={} source={} releasedAllocations={}",
-                orderId, lineItemId, request.cancellationSource(), allocations.size());
-
-        return new CancelOrderResponse(
-                orderId.toString(),
-                order.getStatus().name(),
-                allocations.size(),
-                request.cancellationSource().name(),
-                order.getCancelledAt()
-        );
-    }
-
-    // ─── Private helpers ──────────────────────────────────────────────────────────
-
 	@Transactional
-	public void handleCompleteDeliveryFailure(UUID orderId) {
-		log.warn("[ORDER-BACKEND] Triggering complete delivery failure rollback for order: {}", orderId);
+	public CancelOrderResponse cancelOrder(OrderId orderId,CancelOrderRequest request) {
+		CustomerOrder order = orderRepository.findById(orderId)
+			.orElseThrow(() -> new EntityNotFoundException("Order not found: " + orderId));
 
-		// 1. Mise à jour de TOUTES les lignes à NOT_ALLOCATED en 1 seule requête SQL UPDATE
-		int updatedLines = orderRepository.updateAllLinesStatus(orderId, LineItemStatus.NOT_ALLOCATED);
+		OrderStatus oldStatus = order.getStatus();
 
-		// 2. Mise à jour du statut global de la commande à ALLOCATION_FAILED (ou ORDER_FAILED) en 1 seule requête SQL
-		orderRepository.updateOrderStatus(orderId, OrderStatus.ALLOCATION_FAILED);
+		verifyStatus(oldStatus,order);
 
-		log.info("[ORDER-BACKEND] Successfully failed order {} and its {} lines due to Complete Delivery constraint.", orderId, updatedLines);
+		/**
+		 * Mutation de l'état et persistance uniquement si on n'est pas passé par le cas CANCELLED
+		 */
+		order.cancel(request.cancellationSource());
+		orderRepository.save(order);
+
+		log.info("[CANCEL] Order {} successfully transitioned from {} to CANCELLED.", orderId, oldStatus);
+		return new CancelOrderResponse(
+			orderId.toString(),
+			CANCELLED.name(),
+			0,
+			request.cancellationSource().name(),
+			order.getCancelledAt()
+		);
 	}
 
 
+	@Transactional
+	public CancelOrderResponse cancelLineItems(UUID orderId, CancelOrderRequest request) {
+		log.info("[CANCEL] Initiating batch cancellation for orderId={}, lines={}", orderId, request.lineItemIds().size());
+
+		// 1. Lock pessimiste sur le Parent (Order) pour éviter les conditions de concurrence (Race Conditions)
+		CustomerOrder order = orderRepository.findByIdForUpdate(new OrderId(orderId))
+			.orElseThrow(() -> new OrderNotFoundException("Order not found: " + orderId));
+
+		// 2. Validations des règles de garde globales
+		if (order.getStatus() == OrderStatus.CANCELLED) {
+			throw new OrderCancellationException("Cannot modify a fully cancelled order: " + orderId);
+		}
+		if (order.getStatus() == OrderStatus.FULLY_ALLOCATED) {
+			throw new OrderCancellationException("Cannot cancel items on a fully completed order: " + orderId);
+		}
+
+		// LE MÉTIER EST ENTIÈREMENT DÉLÉGUÉ À L'ENTITÉ ICI :
+		List<LineItemId> targets = order.extractEligibleLineIdsForCancellation(request.lineItemIds());
+		if (targets.isEmpty()) {
+			log.info("[CANCEL] All requested lines are already cancelled for orderId={}", orderId);
+			return new CancelOrderResponse(orderId.toString(), order.getStatus().name(), 0, request.cancellationSource().name(), order.getCancelledAt());
+		}
+
+		order.cancelLines(targets); //Change  orderLines status to Cancelled
+
+		/**
+		 * if  order has allocation_failed status  we look first how  we can change her status because one order could have a single line
+		 * and if her status become cancelled we also change order status to cancelled and stop the programm
+		 */
+		if(order.getStatus() == OrderStatus.ALLOCATION_FAILED){
+			order.evaluateAndModifyGlobalStatus();
+			return new CancelOrderResponse(orderId.toString(), order.getStatus().name(), 0, request.cancellationSource().name(), order.getCancelledAt());
+		}
+
+		// Récupération et Soft-Delete des allocations associées pour éviter définitivement le rejeu
+		List<AllocationItem> allocationsToRelease = allocationItemRepository.findAllByLineItemIdInAndSkuNotNull(targets);
+
+		// 🗑️ Suppression des lignes d'allocation devenues obsolètes
+		allocationItemRepository.deleteAllByLineItemIds(targets);
+
+		// 6. Recalcul et ajustement du statut global de la commande
+		order.evaluateAndModifyGlobalStatus();
+		orderRepository.save(order);
+		if (!allocationsToRelease.isEmpty()) {
+			publishStockReleased(order, allocationsToRelease);
+		}
+		return new CancelOrderResponse(
+			orderId.toString(),
+			order.getStatus().name(),
+			allocationsToRelease.size(),
+			request.cancellationSource().name(),
+			Instant.now()
+		);
+	}
+
+
+	@Transactional
+	public void handleCompleteDeliveryFailure(OrderId orderId) {
+		// 1. On récupère UNIQUEMENT le statut actuel via une projection (SELECT très rapide sur index)
+		Optional<OrderStatus> currentStatusOpt = orderRepository.findStatusById(orderId);
+
+		// Cas A : La commande n'existe pas -> On traite l'anomalie
+		if (currentStatusOpt.isEmpty()) {
+			log.error("[CRITICAL] Order {} does not exist. Cannot process delivery failure.", orderId);
+			throw new EntityNotFoundException("Order not found: " + orderId);
+		}
+
+		OrderStatus currentStatus = currentStatusOpt.get();
+
+		// Cas B : La commande est DÉJÀ dans le bon statut -> Idempotence, on stoppe proprement
+		if (currentStatus == OrderStatus.ALLOCATION_FAILED) {
+			log.info("[ORDER-BACKEND] Order {} is already in ALLOCATION_FAILED status. Skipping redundant updates.", orderId);
+			return;
+		}
+
+		// Cas C : La commande existe et doit être mise à jour
+		orderRepository.updateOrderStatus(orderId, OrderStatus.ALLOCATION_FAILED);
+		int updatedLines = orderRepository.updateAllLinesStatusIfChanged(orderId, LineItemStatus.NOT_ALLOCATED);
+
+		log.info("[ORDER-BACKEND] Successfully transitioned order {} to ALLOCATION_FAILED. {} lines updated.", orderId, updatedLines);
+	}
+
+
+    // ─── Private helpers ──────────────────────────────────────────────────────────
+    private CancelOrderResponse verifyStatus(OrderStatus oldStatus,CustomerOrder order){
+
+		/**
+		 * Utilisation du Switch Expression moderne (Java 14+)
+		 * Avantage : Lisibilité linéaire maximale et zéro effet de bord.
+		 */
+		switch (oldStatus) {
+			case CANCELLED -> {
+				return new CancelOrderResponse(
+					order.getCustomerId(),
+					CANCELLED.name(),
+					0,
+					order.getCancellationSource() != null ? order.getCancellationSource().name() : null,
+					order.getCancelledAt()
+				);
+
+			}
+			case PARTIALLY_ALLOCATED -> {
+				log.info("[CANCEL] Order {} is PARTIAL. Initiating stock release...", order.getCustomerId());
+				releaseStockForPartialOrder(order);
+			}
+			case ALLOCATION_FAILED -> {
+				log.info("[CANCEL] Order {} is FAILED. No stock was altered. Direct cancellation.", order.getCustomerId());
+				throw new OrderCancellationException("Cannot cancel a completed order: " + order.getCustomerId());
+			}
+			default -> {
+				// Optionnel mais recommandé pour les architectures résilientes :
+				// Bloque les états imprévus (ex: READY_FOR_SHIPPING) qui ne devraient pas être annulés ainsi.
+				log.warn("[CANCEL] Order {} is in status {}. Cancellation unhandled or rejected.", order.getCustomerId(), oldStatus);
+				throw new IllegalStateException("Cannot cancel order in status: " + oldStatus);
+			}
+		}
+		return null;
+	}
+
+
+
+	private void releaseStockForPartialLine(CustomerOrder order, List<LineItemId>lineItemIds){
+
+	}
+
+	private void releaseStockForPartialOrder(CustomerOrder order) {
+		// Extraction des IDs de toutes les lignes de la commande
+		List<LineItemId> lineItemIds = order.getLineItems().stream()
+			.map(LineItem::getId)
+			.toList();
+
+		// 🔍 Récupération des allocations réelles existantes pour ces lignes
+		List<AllocationItem> activeAllocations = allocationItemRepository.findAllByLineItemIdInAndSkuNotNull(lineItemIds);
+
+
+		if (activeAllocations.isEmpty()) {
+			log.info("[CANCEL] No active stock allocations found for partial order {}.", order.getId());
+			return;
+		}
+
+		// 🗑️ Suppression des lignes d'allocation devenues obsolètes
+		allocationItemRepository.deleteAllByLineItemIds(lineItemIds);
+
+		publishStockReleased(order,activeAllocations);
+	}
 
     /**
      * Charge l'agrégat Order avec ses lignes et allocations en une seule requête,
@@ -198,26 +275,7 @@ public class OrderService {
                 .orElseThrow(() -> new OrderNotFoundException("Order not found: " + orderId));
     }
 
-    /**
-     * Collecte les allocations des lignes actives à libérer.
-     * Si lineItemId est non null → collecte uniquement pour cette ligne.
-     * Les allocations sont déjà en mémoire grâce au JOIN FETCH dans loadOrderForCancellation.
-     */
-    private List<OrderCancelledEvent.CancelledAllocation> collectAllocations(
-            List<LineItem> lines, LineItemId lineItemId) {
 
-        return lines.stream()
-                .filter(li -> li.getStatus() != LineItemStatus.CANCELLED)
-                .filter(li -> lineItemId == null || li.getId().equals(lineItemId))
-                .flatMap(li -> li.getAllocations().stream()
-                        .map(a -> OrderCancelledEvent.CancelledAllocation.builder()
-                                .skuId(a.getSkuId())
-                                .locationId(a.getLocationId())
-                                .productNr(li.getProductNr().getValue())
-                                .quantity(a.getAllocatedQty().getValue())
-                                .build()))
-                .toList();
-    }
 
     private void publishOrderCancelledEvent(CustomerOrder order,
                                              List<OrderCancelledEvent.CancelledAllocation> allocations,
@@ -226,6 +284,7 @@ public class OrderService {
         kafkaEventPublisher.publishOrderCancelled(OrderCancelledEvent.builder()
                 .eventId(UUID.randomUUID().toString())
                 .orderId(order.getId().toString())
+				.status(order.getStatus().toString())
                 .customerId(order.getCustomerId())
                 .reason(request.reason())
                 .cancelledBy(request.cancelledBy())
@@ -261,6 +320,21 @@ public class OrderService {
         log.debug("[ORDER] Published order.received for orderId={}", order.getId());
     }
 
+
+	private void publishStockReleased(CustomerOrder order, List<AllocationItem>allocationItems){
+		List<StockReleasedEvent.ReleasedLine> lines = allocationItems.stream()
+			.map(this::toReleaseLine)
+			.toList();
+		kafkaEventPublisher.publishStockReleased(StockReleasedEvent.builder()
+			.eventId(UUID.randomUUID().toString())
+			.orderId(order.getId().toString())
+			.releasedLines(lines)
+			.occurredAt(Instant.now())
+			.build());
+
+		log.debug("[ORDER] Published order.received for orderId={}", order.getId());
+	}
+
     private OrderReceivedEvent.OrderLine toOrderLine(LineItem li) {
         return OrderReceivedEvent.OrderLine.builder()
 			    .orderLineItemId(li.getId().getValue().toString())
@@ -270,4 +344,15 @@ public class OrderService {
                 .unitPrice(li.getUnitPrice())
                 .build();
     }
+
+	private StockReleasedEvent.ReleasedLine toReleaseLine(AllocationItem allocationItem){
+		return StockReleasedEvent.ReleasedLine.builder()
+			.sku(allocationItem.getSkuId().toString())
+			.lineItemId(allocationItem.getLineItemId().toString())
+			.ProductNr(allocationItem.getProductNr().getValue())
+			.quantityAllocated(allocationItem.getQuantity())
+			.remainingQuantity(allocationItem.getRemainingQuantity())
+			.build();
+
+	}
 }
