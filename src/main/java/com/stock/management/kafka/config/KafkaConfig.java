@@ -97,7 +97,7 @@ public class KafkaConfig {
 
     @Bean
     public NewTopic orderReceivedTopic() {
-        return TopicBuilder.name(KafkaTopics.ORDER_INPROGRESS)
+        return TopicBuilder.name(KafkaTopics.ORDER_RECEIVED)
                 .partitions(partitions)
                 .replicas(replicationFactor)
                 .config("retention.ms", "604800000")      // 7 days
@@ -105,6 +105,10 @@ public class KafkaConfig {
                 .config("compression.type", "snappy")
                 .build();
     }
+
+
+
+	/*
 
 	@Bean NewTopic orderChangeStatus(){
 
@@ -214,4 +218,6 @@ public class KafkaConfig {
                 .config("retention.ms", "2592000000")
                 .build();
     }
+
+	 */
 }

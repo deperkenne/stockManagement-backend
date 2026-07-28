@@ -1,11 +1,11 @@
 package com.stock.management.shared.security;
 
 import org.springframework.core.convert.converter.Converter;
-import org.springframework.security.authentication.AbstractAuthenticationToken;
-import org.springframework.security.core.GrantedAuthority;
-import org.springframework.security.core.authority.SimpleGrantedAuthority;
-import org.springframework.security.oauth2.jwt.Jwt;
-import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
+//import org.springframework.security.authentication.AbstractAuthenticationToken;
+//import org.springframework.security.core.GrantedAuthority;
+//import org.springframework.security.core.authority.SimpleGrantedAuthority;
+//import org.springframework.security.oauth2.jwt.Jwt;
+//import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 
 import java.util.Collection;
 import java.util.Collections;
@@ -18,6 +18,8 @@ import java.util.Set;
  * Extrait les rôles Keycloak depuis realm_access.roles et resource_access.{clientId}.roles,
  * les préfixe par ROLE_ pour être compatibles avec @PreAuthorize("hasRole('...')").
  */
+
+/*
 public class KeycloakJwtAuthenticationConverter implements Converter<Jwt, AbstractAuthenticationToken> {
 
     private final String clientId;
@@ -71,3 +73,4 @@ public class KeycloakJwtAuthenticationConverter implements Converter<Jwt, Abstra
         return jwt.getSubject();
     }
 }
+*/

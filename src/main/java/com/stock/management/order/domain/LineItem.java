@@ -5,12 +5,18 @@ import jakarta.persistence.*;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
+import lombok.Setter;
 
 import java.math.BigDecimal;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 
 @Entity
-@Table(name = "line_items")
+@Table(name = "line_items", indexes = {
+        @Index(name = "idx_line_items_order_id", columnList = "order_id"),
+        @Index(name = "idx_line_items_product_nr", columnList = "product_nr")
+})
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class LineItem {
@@ -41,6 +47,37 @@ public class LineItem {
     @Column(name = "status", nullable = false, length = 30)
     private LineItemStatus status;
 
+    // Verrou optimiste dédié à la ligne : sans lui, une commande chargée puis modifiée par deux
+    // requêtes concurrentes (ex: annulation d'une ligne + résultat d'allocation Kafka) pourrait
+    // silencieusement écraser l'une des deux mises à jour au flush.
+    @Version
+    @Column(name = "version", nullable = false)
+    private long version;
+
+    @Column(name = "updated_at", nullable = false)
+    private Instant updatedAt;
+
+	@Column(name = "received_at", nullable = false, updatable = false)
+	private Instant receivedAt;
+
+	/**
+	 * Automatisation Hibernate : juste avant le INSERT SQL,
+	 * initialise allocatedAt et updatedAt en mémoire.
+	 */
+	@PrePersist
+	private void onCreate() {
+		Instant now = Instant.now().truncatedTo(ChronoUnit.MILLIS);
+		this.receivedAt = now;
+		this.updatedAt = now;
+	}
+
+	/**
+	 * Juste avant chaque UPDATE SQL, rafraîchit updatedAt.
+	 */
+	@PreUpdate
+	private void onUpdate() {
+		this.updatedAt = Instant.now().truncatedTo(ChronoUnit.MILLIS);
+	}
 
     static LineItem create(CustomerOrder order, ProductNr productNr, Quantity requestedQty, BigDecimal unitPrice) {
         LineItem li = new LineItem();
@@ -55,6 +92,9 @@ public class LineItem {
     }
 
 
+    public void changeLineStatus(LineItemStatus status){
+		this.status = status;
+	}
 
     public boolean isCancellable() {
         return status != LineItemStatus.CANCELLED;
@@ -63,5 +103,14 @@ public class LineItem {
     public void cancel() {
         if (this.status == LineItemStatus.CANCELLED) return;
         this.status = LineItemStatus.CANCELLED;
+    }
+
+    /** Modifie la quantité demandée et le prix unitaire (utilisé par CustomerOrder.updateLineItem). */
+    public void updateDetails(Quantity requestedQty, BigDecimal unitPrice) {
+        if (this.status == LineItemStatus.CANCELLED) {
+            throw new IllegalStateException("Cannot update a cancelled line: " + id);
+        }
+        this.requestedQty = requestedQty;
+        this.unitPrice = unitPrice;
     }
 }

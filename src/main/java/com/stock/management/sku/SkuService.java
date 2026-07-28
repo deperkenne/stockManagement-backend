@@ -1,5 +1,7 @@
 package com.stock.management.sku;
 
+import com.stock.management.allocationLine.AllocationItem;
+import com.stock.management.kafka.event.OrderReceivedEvent;
 import com.stock.management.kafka.event.StockReleasedEvent;
 import com.stock.management.order.domain.ProductNr;
 import com.stock.management.order.domain.Quantity;
@@ -27,53 +29,94 @@ public class SkuService {
 
     private final SkuRepository skuRepository;
 
-    private record SkuLocationKey(String sku, String locationId) {}
 	private final JdbcTemplate jdbcTemplate;
 
 
-	private int[][] incrementAvailableStockInBatch(Map<SkuLocationKey, Integer> stockToRelease) {
-		String sql = "UPDATE stock SET available_quantity = available_quantity + ? WHERE sku = ? AND location_id = ?";
-		return jdbcTemplate.batchUpdate(sql,
+	public Map<String, List<Sku>> lockAndFetchAvailableStock(List<OrderReceivedEvent> events) {
+		List<String> skuCodes = extractAndSortSkuCodes(events);
+
+		if (skuCodes.isEmpty()) {
+			return Map.of();
+		}
+
+		// recupere tous les sku et block ses ligne de sorte a ce que les autres transaction ne puisse pas acceder
+		// attention cei vas echouer si la donner n'est pas persistente quand on vas redemarer le serveur et les consummer kafka vons
+		// redemarer automatiquement
+		// si on utilise H2 sa vas planter car la donnee ne serra plus memoire  au moment ou les consummer kafka vont rejouer cette methode
+		// Verrouillage pessimiste en BDD
+		List<Sku> allSkus = skuRepository.findAvailableSkusForAllocationWithLock(skuCodes);
+
+		// Regroupement par ProductNr
+		return allSkus.stream()
+			.collect(Collectors.groupingBy(s -> s.getProductNr().getValue()));
+	}
+
+
+
+	private List<String> extractAndSortSkuCodes(List<OrderReceivedEvent> events) {
+		return events.stream()
+			.flatMap(e -> e.getLines().stream())
+			.map(OrderReceivedEvent.OrderLine::getSku)
+			.distinct()
+			.sorted() // Tri alphabétique anti-deadlock
+			.collect(Collectors.toList());
+	}
+
+
+	/**
+	public List<Sku> findAvailableSkus(List<String>skuCodes){
+		List<Sku> skus = skuRepository.findAvailableSkusForAllocationWithLock(skuCodes);
+		 return skus;
+	}
+
+	 **/
+
+	@Transactional // INDISPENSABLE pour garantir le ROLLBACK global en cas de violation d'intégrité
+	public void releaseBulkStock(List<AllocationItem>allocationItems) {
+		if (allocationItems == null || allocationItems.isEmpty()) {
+			return;
+		}
+
+		log.info("[STOCK-SERVICE] Libération de stock en lot pour {} items d'allocation.", allocationItems.size());
+
+		// 1. Conversion directe en Map (SKU -> Quantité à libérer)
+		// Note : toMap plantera si deux items ont le même SKU.
+		// Si des doublons de SKU sont possibles dans ta liste, utilise "Collectors.groupingBy" à la place.
+		Map<UUID, Integer> stockToRelease = allocationItems.stream()
+			.collect(Collectors.toMap(
+				AllocationItem::getSkuId,
+				AllocationItem::getQuantity
+			));
+
+		// 2. Exécution de la mise à jour en lot (Batch SQL)
+		int[][] result = incrementAvailableStockInBatch(stockToRelease);
+
+		// 3. Vérification de l'intégrité (on "aplatit" le tableau 2D en 1D avec flatMapToInt) le mettre dans une fonction separer
+		boolean hasMissingSku = Arrays.stream(result)
+			.flatMapToInt(Arrays::stream)
+			.anyMatch(count -> count == 0);
+
+		if (hasMissingSku) {
+			log.error("[CRITICAL] Erreur d'intégrité : Impossible de trouver une ligne de stock pour l'un des SKU.");
+			throw new IllegalStateException("La libération du stock en lot a échoué : SKU introuvable en base.");
+		}
+
+		log.info("[STOCK-SERVICE] Stock libéré avec succès pour {} SKUs.", stockToRelease.size());
+	}
+
+	private int[][] incrementAvailableStockInBatch(Map<UUID, Integer> stockToRelease) {
+		// Requête simplifiée : on filtre uniquement par SKU désormais
+		String sql = "UPDATE stock SET available_quantity = available_quantity + ? WHERE sku = ?";
+
+		return jdbcTemplate.batchUpdate(
+			sql,
 			stockToRelease.entrySet(),
 			stockToRelease.size(),
 			(ps, entry) -> {
 				ps.setInt(1, entry.getValue());
-				ps.setString(2, entry.getKey().sku());
-				ps.setString(3, entry.getKey().locationId());
+				ps.setString(2, entry.getKey().toString()); // Le SKU (la clé de ta Map)
 			}
 		);
-	}
-
-	@Transactional // 🔴 INDISPENSABLE pour garantir le ROLLBACK global en cas de violation d'intégrité
-	public void releaseBulkStock(StockReleasedEvent event) {
-		if (event == null) return;
-		List<StockReleasedEvent.ReleasedLine> lines = event.getReleasedLines();
-		if (lines == null || lines.isEmpty()) return;
-
-		log.info("[STOCK-SERVICE] Batch stock release for order: {}", event.getOrderId());
-		/**
-		 * very well performence strategy
-		 * grouping records  by  unique key , to perform only a single update per row
-		 * and jdbTemplate.batchUpdate is the most effecient  approach  in spring for processing large  volumes of Data
-		 *
-		 */
-		Map<SkuLocationKey, Integer> stockToRelease = lines.stream()
-			.collect(Collectors.groupingBy(
-				line -> new SkuLocationKey(line.getSku(), line.getLocationId()),
-				Collectors.summingInt(StockReleasedEvent.ReleasedLine::getQuantityAllocated)
-			));
-
-		int[][] result = incrementAvailableStockInBatch(stockToRelease);
-
-		boolean integrityViolation = Arrays.stream(result)
-			.flatMapToInt(Arrays::stream)
-			.anyMatch(r -> r == 0);
-		if (integrityViolation) {
-			log.error("[CRITICAL] Inventory integrity violation during batch release for order: {}", event.getOrderId());
-			throw new IllegalStateException("Batch stock release failed: unmatched stock row.");
-		}
-
-		log.info("[STOCK-SERVICE] Released stock for {} distinct locations.", stockToRelease.size());
 	}
 
 
@@ -99,6 +142,10 @@ public class SkuService {
         return toResponse(sku);
     }
 
+    // READ (liste) — toutes les SKUs existantes, tous emplacements confondus.
+    public List<SkuResponse> findAll() {
+        return skuRepository.findAll().stream().map(this::toResponse).toList();
+    }
 
     public SkuResponse findById(UUID id) {
         SkuId skuId = new SkuId(id);
@@ -115,6 +162,7 @@ public class SkuService {
         return skus.stream().map(this::toResponse).toList();
     }
 
+    @Transactional
     public void reserve(SkuId skuId, Quantity qty) {
         Sku sku = skuRepository.findByIdForUpdate(skuId)
                 .orElseThrow(() -> new SkuNotFoundException("SKU not found: " + skuId));
@@ -124,6 +172,7 @@ public class SkuService {
     }
 
 	// reaprovisionement du stock des quantity liberera
+    @Transactional
     public void release(SkuId skuId, Quantity qty) {
         Sku sku = skuRepository.findByIdForUpdate(skuId)
                 .orElseThrow(() -> new SkuNotFoundException("SKU not found: " + skuId));
@@ -138,6 +187,7 @@ public class SkuService {
      * Réapprovisionnement physique : nouveau stock reçu au warehouse.
      * Notifie immédiatement les commandes en attente de ce SKU.
      */
+    @Transactional
     public SkuResponse replenish(UUID id, int additionalQty) {
         SkuId skuId = new SkuId(id);
         Sku sku = skuRepository.findByIdForUpdate(skuId)
@@ -152,6 +202,45 @@ public class SkuService {
         //allocationRetryService.notifyStockAvailable(sku.getProductNr().getValue());
 
         return toResponse(sku);
+    }
+
+    /**
+     * UPDATE (PUT) — remplace productNr, totalQuantity et locationCode.
+     * L'id (SkuId) reste toujours celui de l'URL : impossible de "voler" l'id d'un autre SKU via le body.
+     */
+    @Transactional
+    public SkuResponse update(UUID id, CreateSkuRequest request) {
+        SkuId skuId = new SkuId(id);
+        Sku sku = skuRepository.findById(skuId)
+                .orElseThrow(() -> new SkuNotFoundException("SKU not found: " + id));
+
+        String newLocationCode = request.locationCode().trim().toUpperCase();
+        boolean locationChanged = !newLocationCode.equals(sku.getLocation().getCode());
+        if (locationChanged && skuRepository.existsByLocationCodeExcludingId(newLocationCode, skuId)) {
+            throw new DuplicateSkuException("Un autre SKU utilise déjà l'emplacement: " + newLocationCode);
+        }
+
+        sku.updateDetails(new ProductNr(request.productNr()), new Quantity(request.totalQuantity()), request.locationCode());
+
+        log.info("[SKU] Updated skuId={} productNr={} location={} totalQty={}",
+                id, sku.getProductNr().getValue(), sku.getLocation().getCode(), sku.getTotalQuantity().getValue());
+
+        return toResponse(sku);
+    }
+
+    /**
+     * DELETE — supprime le SKU. cascade=ALL + orphanRemoval=true sur WarehouseLocation supprime
+     * automatiquement l'emplacement associé. StockAllocation/AllocationItem stockent skuId en UUID
+     * brut (pas de @JoinColumn JPA) : aucune contrainte de clé étrangère ne peut donc bloquer cette suppression.
+     */
+    @Transactional
+    public void delete(UUID id) {
+        SkuId skuId = new SkuId(id);
+        if (!skuRepository.existsById(skuId)) {
+            throw new SkuNotFoundException("SKU not found: " + id);
+        }
+        skuRepository.deleteById(skuId);
+        log.info("[SKU] Deleted skuId={}", id);
     }
 
     // ─── Private helpers ──────────────────────────────────────────────────────────

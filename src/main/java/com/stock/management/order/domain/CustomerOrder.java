@@ -1,15 +1,22 @@
 package com.stock.management.order.domain;
 
 import com.stock.management.kafka.event.OrderReceivedEvent;
+import com.stock.management.order.LineItemNotFoundException;
+import com.stock.management.order.OrderCancellationException;
+import com.stock.management.order.dto.CreateOrderRequest;
 import com.stock.management.order.dto.LineItemRequest;
 import jakarta.persistence.*;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
+import lombok.Setter;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
+
+import static com.stock.management.order.domain.LineItemStatus.NOT_ALLOCATED;
 
 /**
  * ordercancelation consomme via une requette API POst duclient
@@ -19,16 +26,15 @@ import java.util.*;
 
 
 @Entity
-@Table(name = "customer_orders")
+@Table(name = "customer_orders", indexes = {
+        @Index(name = "idx_customer_orders_status", columnList = "status")
+})
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class CustomerOrder {
 
     @EmbeddedId
     private OrderId id;
-
-    @Column(name = "external_order_nr", nullable = false, unique = true)
-    private String externalOrderNr;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 30)
@@ -41,17 +47,28 @@ public class CustomerOrder {
     @Column(name = "complete_delivery_required", nullable = false)
     private boolean completeDeliveryRequired;
 
-    @Column(name = "customer_id", nullable = false)
-    private String customerId;
+	@Column(name = "cancel-reason", nullable = true)
+	private String cancelReason;
+
+	@Column(name = "cancel-by", nullable = true)
+	private String cancelBy;
+
+
+    //@Column(name = "customer_id", nullable = false)
+    //private String customerId;
 
    // @Column(name = "warehouse_id", nullable = false)
    // private String warehouseId;
 
     @Column(name = "currency", nullable = false, length = 3)
     private String currency;
-
-    @Column(name = "received_at", nullable = false)
+    @Column(name = "received_at", nullable = false, updatable = false)
     private Instant receivedAt;
+
+    // Dernière modification — alimenté automatiquement par Hibernate (@PrePersist/@PreUpdate).
+    // Sert de signal de fraîcheur pour l'analytique (latence de traitement = updatedAt - receivedAt).
+    @Column(name = "updated_at", nullable = false)
+    private Instant updatedAt;
 
     // Source de l'annulation — null tant que la commande n'est pas annulée
     @Enumerated(EnumType.STRING)
@@ -69,41 +86,70 @@ public class CustomerOrder {
     @OneToMany(mappedBy = "customerOrder", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<LineItem> lineItems = new ArrayList<>();
 
-    // ─── Factory ─────────────────────────────────────────────────────────────────
 
-    public static CustomerOrder create(
-            String externalOrderNr,
-            String customerId,
-            //String warehouseId,
-            Priority priority,
-            boolean completeDeliveryRequired,
-            String currency,
-            List<LineItemRequest> lineItemRequests) {
+	/**
+	 * Automatisation Hibernate : juste avant le INSERT SQL,
+	 * initialise allocatedAt et updatedAt en mémoire.
+	 */
+	@PrePersist
+	private void onCreate() {
+		Instant now = Instant.now().truncatedTo(ChronoUnit.MILLIS);
+		this.receivedAt = now;
+		this.updatedAt = now;
+	}
 
-        CustomerOrder order = new CustomerOrder();
-        order.id = OrderId.generate();
-        order.externalOrderNr = externalOrderNr;
-        order.status = OrderStatus.PENDING;
-        order.priority = priority;
-        order.completeDeliveryRequired = completeDeliveryRequired;
-        order.customerId = customerId;
-        //order.warehouseId = warehouseId;
-        order.currency = currency;
-        order.receivedAt = Instant.now();
+	/**
+	 * Juste avant chaque UPDATE SQL, rafraîchit updatedAt.
+	 */
+	@PreUpdate
+	private void onUpdate() {
+		this.updatedAt = Instant.now().truncatedTo(ChronoUnit.MILLIS);
+	}
 
-        for (LineItemRequest req : lineItemRequests) {
-            LineItem li = LineItem.create(
-                    order,
-                    new ProductNr(req.productNr()),
-                    new Quantity(req.requestedQty()),
-                    req.unitPrice()
-            );
-            order.lineItems.add(li);
-        }
 
-        return order;
-    }
+	// =========================================================================
+	// FACTORY METHOD OPTIMISÉE (Encapsule la création et protège le domaine)
+	// =========================================================================
+	public static CustomerOrder create(
+		Priority priority,
+		boolean completeDeliveryRequired,
+		String currency,
+		List<LineItemRequest> lineItemRequests) {
 
+		CustomerOrder order = new CustomerOrder();
+		order.id = OrderId.generate();
+		order.status = OrderStatus.PENDING;
+		order.priority = priority;
+		order.completeDeliveryRequired = completeDeliveryRequired;
+		order.currency = currency;
+
+		Instant now = Instant.now();
+		order.receivedAt = now;
+		order.updatedAt = now;
+
+		// Pré-dimensionnement de la liste pour éviter la réallocation mémoire
+		order.lineItems = new ArrayList<>(lineItemRequests.size());
+
+		for (LineItemRequest req : lineItemRequests) {
+			// Helper method pour maintenir la cohérence bidirectionnelle
+			order.addLineItem(req.productNr(), req.requestedQty(), req.unitPrice());
+		}
+
+		return order;
+	}
+
+	/**
+	 * Garantit la cohérence bidirectionnelle JPA sans fuite d'encapsulation
+	 */
+	private void addLineItem(String productNr, int quantity, BigDecimal unitPrice) {
+		LineItem li = LineItem.create(
+			this,
+			new ProductNr(productNr),
+			new Quantity(quantity),
+			unitPrice
+		);
+		this.lineItems.add(li);
+	}
     // ─── Business methods ─────────────────────────────────────────────────────────
 
 	/**
@@ -186,17 +232,23 @@ public class CustomerOrder {
     }
 
     /** Annule toute la commande — toutes les lignes non encore annulées sont annulées. */
-    public void cancel(CancellationSource source) {
+    public void cancel(CancellationSource cancellationSource,String reason,String cancelBy) {
         if (this.status == OrderStatus.FULLY_ALLOCATED) {
             throw new IllegalStateException("Cannot cancel a completed order: " + id);
         }
         this.status = OrderStatus.CANCELLED;
+		this.cancelReason = reason;
         this.cancelledAt = Instant.now();
-        this.cancellationSource = source;
+        this.cancellationSource = cancellationSource;
+		this.cancelBy = cancelBy;
         lineItems.stream()
                 .filter(li -> li.getStatus() != LineItemStatus.CANCELLED)
                 .forEach(LineItem::cancel);
     }
+
+	public static OrderId createIdFrom(UUID rawUuid) {
+		return new OrderId(rawUuid);
+	}
 
     /**
      * Annule une seule ligne.
@@ -234,4 +286,84 @@ public class CustomerOrder {
         if (fullyAllocated == active) this.status = OrderStatus.FULLY_ALLOCATED;
         else if (fullyAllocated > 0)  this.status = OrderStatus.PARTIALLY_ALLOCATED;
     }
+
+    // ─── CRUD (ajout / modification / suppression manuelle d'une ligne) ───────────
+
+    /** Met à jour les champs modifiables de la commande. L'id, l'externalOrderNr et le status ne changent jamais ici. */
+    public void updateDetails(Priority priority, boolean completeDeliveryRequired, String currency) {
+        if (this.status == OrderStatus.CANCELLED) {
+            throw new OrderCancellationException("Cannot update a cancelled order: " + id);
+        }
+        this.priority = priority;
+        this.completeDeliveryRequired = completeDeliveryRequired;
+        this.currency = currency;
+    }
+
+    /** Ajoute une nouvelle ligne à la commande existante. Interdit sur une commande déjà annulée. */
+    public LineItem addLineItem(ProductNr productNr, Quantity requestedQty, BigDecimal unitPrice) {
+        if (this.status == OrderStatus.CANCELLED) {
+            throw new OrderCancellationException("Cannot add a line to a cancelled order: " + id);
+        }
+        LineItem li = LineItem.create(this, productNr, requestedQty, unitPrice);
+        this.lineItems.add(li);
+        return li;
+    }
+
+    /** Modifie la quantité demandée et le prix unitaire d'une ligne existante. */
+    public void updateLineItem(LineItemId lineItemId, Quantity requestedQty, BigDecimal unitPrice) {
+        LineItem line = findLineItem(lineItemId)
+                .orElseThrow(() -> new LineItemNotFoundException("LineItem not found: " + lineItemId));
+        line.updateDetails(requestedQty, unitPrice);
+    }
+
+    /** Retire définitivement une ligne de la commande — orphanRemoval=true déclenche le DELETE SQL au flush. */
+    public void removeLineItem(LineItemId lineItemId) {
+        LineItem line = findLineItem(lineItemId)
+                .orElseThrow(() -> new LineItemNotFoundException("LineItem not found: " + lineItemId));
+        this.lineItems.remove(line);
+    }
+
+
+
+
+
+   public void updateOrderStatus(OrderStatus orderStatus){
+		    this.status = orderStatus;
+   }
+
+   private  Optional<LineItem> findLineById(UUID lineId){
+	   return this.lineItems.stream()
+		   .filter(item -> item.getId().getValue().equals(lineId))
+		   .findFirst();
+   }
+
+   public void updateLineItemStatus( Map<UUID, LineItemStatus> lineStatusUpdates) {
+
+	   for (Map.Entry<UUID, LineItemStatus> entry : lineStatusUpdates.entrySet()) {
+		   UUID lineId = entry.getKey();
+		   LineItemStatus newStatus = entry.getValue();
+
+		   LineItem line = findLineById(lineId)
+			   .orElseThrow(() -> new IllegalArgumentException(
+				   "OrderLine " + lineId + " not found in CustomerOrder " + this.id
+			   ));
+
+		   // L'entité OrderLine gère sa propre validation / transition
+		   line.changeLineStatus(newStatus);
+	   }
+
+	   // 🟢 FIN : Hibernate détecte les statuts modifiés en RAM et met à jour la BDD au commit
+   }
+
+
+	public  BigDecimal calculateTotal(){
+		BigDecimal total = getLineItems().stream()
+
+			.map(li -> li.getUnitPrice().multiply(BigDecimal.valueOf(li.getRequestedQty().getValue())))
+
+			.reduce(BigDecimal.ZERO, BigDecimal::add);
+
+		return total;
+	}
+
 }

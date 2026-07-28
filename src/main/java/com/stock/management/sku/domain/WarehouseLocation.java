@@ -47,4 +47,12 @@ public class WarehouseLocation {
         this.locked = false;
         this.lockedReason = null;
     }
+
+    /** Renomme l'emplacement (utilisé par Sku.updateDetails lors d'un PUT). */
+    void rename(String code) {
+        if (code == null || code.isBlank()) {
+            throw new IllegalArgumentException("Location code must not be blank");
+        }
+        this.code = code.trim().toUpperCase();
+    }
 }

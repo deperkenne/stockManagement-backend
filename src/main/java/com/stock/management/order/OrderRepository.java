@@ -10,66 +10,76 @@ import org.springframework.data.repository.query.Param;
 
 import java.util.List;
 import java.util.Optional;
-import java.util.UUID;
-
-
-// exercice corriger toute les requette inutile qui entraine le lock et aller et retour inutile
-// et qui ralenti la performance
 
 public interface OrderRepository extends JpaRepository<CustomerOrder, OrderId> {
 
-    boolean existsByExternalOrderNr(String externalOrderNr);
-	/**
-	 * Récupère uniquement le statut d'une commande par son ID.
-	 * Évite le chargement complet de l'entité et de ses relations (Performance).
-	 */
-	@Query("SELECT o.status FROM CustomerOrder o WHERE o.id = :id")
-	Optional<OrderStatus> findStatusById(@Param("id") OrderId id);
 
-    Optional<CustomerOrder> findByExternalOrderNr(String externalOrderNr);
+    /**
+     * Récupère uniquement le statut d'une commande par son ID.
+     * Évite le chargement complet de l'entité et de ses relations (Performance).
+     */
+    @Query("SELECT o.status FROM CustomerOrder o WHERE o.id = :id")
+    Optional<OrderStatus> findStatusById(@Param("id") OrderId id);
 
-	@Modifying
-	@Query("UPDATE Order o SET o.status = :newStatus WHERE o.id = :orderId AND o.status != :newStatus")
-	int updateOrderStatusIfChanged(@Param("orderId") OrderId orderId, @Param("newStatus") OrderStatus newStatus);
+    /**
+     * Mise à jour ciblée du statut d'une commande (utilisée par le flux d'allocation).
+     * clearAutomatically/flushAutomatically évitent que le 1er niveau de cache renvoie
+     * une entité obsolète si elle est relue dans la même transaction.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE CustomerOrder o SET o.status = :status WHERE o.id = :orderId")
+    int updateOrderStatus(@Param("orderId") OrderId orderId, @Param("status") OrderStatus status);
 
-	@Modifying
-	@Query("UPDATE LineItem l SET l.status = :lineStatus WHERE l.order.id = :orderId AND l.status != :lineStatus")
-	int updateAllLinesStatusIfChanged(@Param("orderId") OrderId orderId, @Param("lineStatus") LineItemStatus lineStatus);
-
-
-	/**
-	 * Met à jour le statut de toutes les lignes d'une commande spécifique en une seule requête SQL.
-	 * clearAutomatically = true évite les effets de bord avec le cache de premier niveau (Persistence Context).
-	 */
-	@Modifying(clearAutomatically = true, flushAutomatically = true)
-	@Query("UPDATE LineItem l SET l.status = :status WHERE l.orderId = :orderId")
-	int updateAllLinesStatus(@Param("orderId") OrderId orderId, @Param("status") LineItemStatus status);
-
-
-
-	@Modifying(clearAutomatically = true, flushAutomatically = true)
-	@Query("UPDATE Order o SET o.status = :status WHERE o.id = :orderId")
-	int updateOrderStatus(@Param("orderId") OrderId orderId, @Param("status") OrderStatus status);
-
-	@Modifying
-	@Query("UPDATE OrderLine l SET l.status = :lineStatus WHERE l.orderId = :orderId AND l.id = :lineId")
-	int updateLineStatus(
-		@Param("orderId") OrderId orderId,
-		@Param("lineId") LineItemId lineId,
-		@Param("lineStatus") LineItemStatus lineItemStatus
-		);
-
+    /**
+     * Met à jour le statut de plusieurs commandes en une seule requête (traitement batch).
+     * Comparaison directe sur l'EmbeddedId (o.id IN :ids), pas sur son attribut interne.
+     */
     @Modifying
-    @Query("UPDATE Order o SET o.status = :status WHERE o.id.value IN :ids")
+    @Query("UPDATE CustomerOrder o SET o.status = :status WHERE o.id IN :ids")
     int updateStatusForIds(@Param("ids") List<OrderId> ids, @Param("status") OrderStatus status);
 
-    @Query("SELECT o FROM CustomerOrder o LEFT JOIN FETCH o.lineItems WHERE o.id = :id")
+    /**
+     * Met à jour le statut d'une seule ligne d'une commande (boucle d'allocation ligne par ligne).
+     */
+    @Modifying
+    @Query("UPDATE LineItem l SET l.status = :lineStatus WHERE l.customerOrder.id = :orderId AND l.id = :lineId")
+    int updateLineStatus(
+            @Param("orderId") OrderId orderId,
+            @Param("lineId") LineItemId lineId,
+            @Param("lineStatus") LineItemStatus lineStatus
+    );
+
+    /**
+     * Met à jour le statut de toutes les lignes actives d'une commande en une seule requête.
+     */
+    @Modifying(clearAutomatically = true)
+    @Query("UPDATE LineItem l SET l.status = :lineStatus WHERE l.customerOrder.id = :orderId AND l.status != :lineStatus")
+    int updateAllLinesStatusIfChanged(@Param("orderId") OrderId orderId, @Param("lineStatus") LineItemStatus lineStatus);
+
+    /**
+     * Charge l'agrégat commande + ses lignes en une seule requête (évite le N+1 sur lineItems).
+     * DISTINCT est indispensable : sans lui, une commande avec plusieurs lignes ferait remonter
+     * plusieurs lignes SQL pour la même commande, et Optional/getSingleResult lèverait
+     * NonUniqueResultException dès qu'une commande a 2 lignes ou plus.
+     */
+    @Query("SELECT DISTINCT o FROM CustomerOrder o LEFT JOIN FETCH o.lineItems WHERE o.id = :id")
     Optional<CustomerOrder> findByIdWithLineItems(@Param("id") OrderId id);
 
     /**
-     * Finds orders in a given status whose lines include at least one of the given productNrs.
-     * Used by AllocationRetryService to replay ALLOCATION_FAILED orders after stock is released.
-     * EXISTS subquery ensures all lineItems are fetched, not just the matching ones.
+     * Charge la commande AVEC ses lignes, verrouillée en écriture (PESSIMISTIC_WRITE), en une seule requête.
+     * Utilisée pour toute mutation de l'agrégat (annulation totale ou partielle) : un seul aller-retour
+     * base de données au lieu de deux (lock puis lazy-load des lignes), et protège contre les mises à jour
+     * concurrentes (ex: une allocation en cours sur la même commande). Un seul verrou sur une seule ligne
+     * (celle de la commande) : aucun risque de deadlock, il n'y a pas d'ordre de verrouillage à respecter.
+     */
+
+    @Query("SELECT DISTINCT o FROM CustomerOrder o LEFT JOIN FETCH o.lineItems WHERE o.id = :id")
+    Optional<CustomerOrder> findByIdWithLineItemsForUpdate(@Param("id") OrderId id);
+
+    /**
+     * Commandes dans un statut donné dont au moins une ligne concerne un des productNr fournis.
+     * Utilisée par AllocationRetryService pour rejouer les commandes ALLOCATION_FAILED après réapprovisionnement.
+     * EXISTS garantit que TOUTES les lignes sont chargées (JOIN FETCH), pas seulement celles qui correspondent.
      */
     @Query("""
             SELECT DISTINCT o FROM CustomerOrder o
@@ -85,29 +95,4 @@ public interface OrderRepository extends JpaRepository<CustomerOrder, OrderId> {
             @Param("status") OrderStatus status,
             @Param("productNrs") List<String> productNrs
     );
-
-
-    /**
-     * Charge la commande avec ses lignes ET leurs allocations en une seule requête.
-     * Lock pessimiste WRITE pour garantir l'atomicité lors d'une annulation concurrente.
-     * DISTINCT évite la duplication de l'agrégat due aux JOINs imbriqués.
-     */
-    @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @Query("""
-            SELECT DISTINCT o FROM CustomerOrder o
-            LEFT JOIN FETCH o.lineItems li
-            LEFT JOIN FETCH li.allocations
-            WHERE o.id = :id
-            """)
-    Optional<CustomerOrder> findByIdWithLineItemsAndAllocationsForUpdate(@Param("id") OrderId id);
-
-
-	@Lock(LockModeType.PESSIMISTIC_WRITE)
-	@Query("SELECT o FROM CustomerOrder o WHERE o.id = :id")
-	Optional<CustomerOrder> findByIdForUpdate(@Param("id") OrderId id);
-
-	@Modifying(clearAutomatically = true)
-	@Query("UPDATE LineItem l SET l.status = :status WHERE l.orderId = :orderId AND l.id IN :lineIds")
-	void updateLinesStatus(UUID orderId, List<LineItemId> lineIds, LineItemStatus status);
 }
-

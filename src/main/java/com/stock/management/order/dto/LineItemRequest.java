@@ -13,7 +13,7 @@ public record LineItemRequest(
         String productNr,
 
         @Positive(message = "requestedQty must be greater than 0")
-        int requestedQty,
+		Integer requestedQty,
 
         @NotNull(message = "unitPrice must not be null")
         @DecimalMin(value = "0.00", message = "unitPrice must not be negative")

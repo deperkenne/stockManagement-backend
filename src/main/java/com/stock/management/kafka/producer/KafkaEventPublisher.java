@@ -2,6 +2,7 @@ package com.stock.management.kafka.producer;
 
 import com.stock.management.kafka.config.KafkaTopics;
 import com.stock.management.kafka.event.*;
+import com.stock.management.order.domain.CustomerOrder;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -20,10 +21,12 @@ public class KafkaEventPublisher {
 
     private final KafkaTemplate<String, Object> kafkaTemplate;
 
-    public void publishOrderReceived(OrderReceivedEvent event) {
-        send(KafkaTopics.ORDER_RECEIVED, event.getOrderId(), event);
-    }
+	public void publishOrderReceived(OrderReceivedEvent event) {
+		send(KafkaTopics.ORDER_RECEIVED, event.getOrderId(), event);
+	}
 
+
+	/*
     public void publishStockAllocated(StockAllocatedEvent event) {
         send(KafkaTopics.STOCK_ALLOCATED, event.getOrderId(), event);
     }
@@ -73,6 +76,8 @@ public class KafkaEventPublisher {
 			.toList();
 		return ids;
 	}
+
+	 */
     private void send(String topic, String key, Object payload) {
         CompletableFuture<SendResult<String, Object>> future =
                 kafkaTemplate.send(topic, key, payload);

@@ -6,6 +6,7 @@ import com.stock.management.allocationLine.AllocationItemService;
 import com.stock.management.kafka.event.*;
 import com.stock.management.kafka.producer.KafkaEventPublisher;
 import com.stock.management.order.OrderService;
+import com.stock.management.order.domain.CustomerOrder;
 import com.stock.management.order.domain.OrderId;
 import com.stock.management.sku.SkuService;
 import lombok.RequiredArgsConstructor;
@@ -22,24 +23,31 @@ import java.util.UUID;
 public class KafkaEventHandler {
 
     private final AllocationService allocationService;
+
+	/*
     private final AllocationRetryService allocationRetryService;
     private final SkuService skuService;
 	private final OrderService orderService;
+	*/
+
 	private final AllocationItemService allocationItemService;
     private final KafkaEventPublisher kafkaEventPublisher;
 
-    public void handleOrderReceived(OrderReceivedEvent event) {
-        log.info("[HANDLER] order.received orderId={} customerId={} lines={}",
-                event.getOrderId(), event.getCustomerId(), event.getLines().size());
-        allocationService.allocate(event);
-    }
 
-    public void handleOrderReceivedBatch(List<OrderReceivedEvent> events) {
-        log.info("[HANDLER] order.received batch size={}", events.size());
+
+    public void handleOrderReceivedBatch(List<OrderReceivedEvent> orderReceivedEvents) {
+        log.info("[HANDLER] order.received batch size={}", orderReceivedEvents.size());
 		// before we start the process allocation we need to send a message
 		// to order to change the order status
-        allocationService.allocateBatch(events);
+        allocationService.allocate(orderReceivedEvents);
     }
+
+	/*
+	public void handleOrderReceived(OrderReceivedEvent event) {
+		log.info("[HANDLER] order.received orderId={} customerId={} lines={}",
+			event.getOrderId(), event.getCustomerId(), event.getLines().size());
+		// allocationService.allocate(event);
+	}
 
     public void handleStockAllocated(StockAllocatedEvent event) {
         log.info("[HANDLER] stock.allocated orderId={} lines={}",
@@ -48,10 +56,10 @@ public class KafkaEventHandler {
 		allocationItemService.onStockAllocated(event);
     }
 
-    /**
-     * Annulation reçue → libère le stock de chaque allocation → publie StockReleasedEvent.
-     * StockReleasedEvent déclenchera notifyStockAvailable() pour les commandes en attente.
-     */
+
+     // Annulation reçue → libère le stock de chaque allocation → publie StockReleasedEvent.
+     //StockReleasedEvent déclenchera notifyStockAvailable() pour les commandes en attente.
+
     public void handleOrderCancelled(OrderCancelledEvent event) {
         log.info("[HANDLER] order.cancelled orderId={} scope={} allocations={}",
                 event.getOrderId(), event.getScope(), event.getAllocations().size());
@@ -82,15 +90,15 @@ public class KafkaEventHandler {
             .build();
     }
 
-    /**
-     * Stock libéré → notifier le retry pour chaque productNr libéré.
-     * line.getSku() contient le productNr — plusieurs SKUs peuvent le couvrir.
-     */
+
+     //Stock libéré → notifier le retry pour chaque productNr libéré.
+     //line.getSku() contient le productNr — plusieurs SKUs peuvent le couvrir.
+
     public void handleStockReleased(StockReleasedEvent event) {
         log.info("[HANDLER] stock.released orderId={} lines={}",
                 event.getOrderId(), event.getReleasedLines().size());
-        skuService.releaseBulkStock(event);
-        allocationRetryService.retryPendingOrders(event);
+        //skuService.releaseBulkStock(event);
+        //allocationRetryService.retryPendingOrders(event);
     }
 
     public void handleSkuCorrected(SkuCorrectedEvent event) {
@@ -117,4 +125,7 @@ public class KafkaEventHandler {
                 event.getOrderId(), event.getReason());
         // TODO: update warehouse availability
     }
+
+	 */
+
 }

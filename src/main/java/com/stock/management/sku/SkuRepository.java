@@ -57,4 +57,12 @@ public interface SkuRepository extends JpaRepository<Sku, SkuId> {
             """)
     List<Sku> findAvailableSkusForAllocationWithLock(@Param("skuCodes") List<String> skuCodes);
 
+    // Vérifie qu'AUCUN AUTRE Sku (donc en excluant celui qu'on modifie) n'utilise déjà ce code d'emplacement.
+    // Utilisé lors d'un PUT pour renvoyer une erreur 409 claire plutôt qu'une violation de contrainte SQL brute.
+    @Query("SELECT COUNT(s) > 0 FROM Sku s WHERE s.location.code = :code AND s.id <> :id")
+    boolean existsByLocationCodeExcludingId(@Param("code") String code, @Param("id") SkuId id);
+
+
+
+
 }

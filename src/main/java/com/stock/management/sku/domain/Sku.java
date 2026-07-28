@@ -23,6 +23,8 @@ public class Sku {
     @AttributeOverride(name = "value", column = @Column(name = "product_nr", nullable = false))
     private ProductNr productNr;
 
+
+
     @Embedded
     @AttributeOverride(name = "value", column = @Column(name = "total_qty", nullable = false))
     private Quantity totalQuantity;
@@ -94,5 +96,24 @@ public class Sku {
 
     public boolean hasAvailableStock(Quantity requested) {
         return !location.isLocked() && availableQuantity.getValue() >= requested.getValue();
+    }
+
+    /**
+     * Mise à jour "CRUD" (PUT) : remplace productNr, totalQuantity et l'emplacement.
+     * availableQuantity est ajustée du même delta que totalQuantity, pour ne jamais dépasser
+     * ce qui est physiquement possible ni descendre sous 0 (protège le stock déjà réservé).
+     */
+    public void updateDetails(ProductNr productNr, Quantity totalQuantity, String locationCode) {
+        int delta = totalQuantity.getValue() - this.totalQuantity.getValue();
+        int newAvailable = this.availableQuantity.getValue() + delta;
+        if (newAvailable < 0) {
+            throw new IllegalStateException(
+                    "Impossible de réduire totalQuantity en dessous de la quantité déjà réservée pour "
+                    + productNr.getValue());
+        }
+        this.productNr = productNr;
+        this.totalQuantity = totalQuantity;
+        this.availableQuantity = new Quantity(newAvailable);
+        this.location.rename(locationCode);
     }
 }

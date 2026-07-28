@@ -27,9 +27,32 @@ public class SkuController {
         return skuService.createSku(request);
     }
 
+    // READ (liste) — GET /api/skus : toutes les SKUs en base.
+    @GetMapping
+    public List<SkuResponse> getAll() {
+        return skuService.findAll();
+    }
+
     @GetMapping("/{id}")
     public SkuResponse getById(@PathVariable UUID id) {
         return skuService.findById(id);
+    }
+
+    // UPDATE — PUT /api/skus/{id} : remplace productNr, totalQuantity et locationCode.
+    // Même corps JSON que la création (POST) :
+    // { "productNr": "ABC123", "totalQuantity": 50, "locationCode": "A-01" }
+    @PutMapping("/{id}")
+    public SkuResponse update(@PathVariable UUID id, @Valid @RequestBody CreateSkuRequest request) {
+        log.info("[REST] PUT /api/skus/{}", id);
+        return skuService.update(id, request);
+    }
+
+    // DELETE — supprime définitivement le SKU et son emplacement (cascade automatique).
+    @DeleteMapping("/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void delete(@PathVariable UUID id) {
+        log.info("[REST] DELETE /api/skus/{}", id);
+        skuService.delete(id);
     }
 
     @GetMapping("/product-nr/{productNr}")
