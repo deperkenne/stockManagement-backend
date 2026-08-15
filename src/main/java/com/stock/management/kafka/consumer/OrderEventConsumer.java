@@ -3,6 +3,7 @@ package com.stock.management.kafka.consumer;
 import com.stock.management.kafka.config.KafkaTopics;
 import com.stock.management.kafka.event.*;
 import com.stock.management.kafka.handler.KafkaEventHandler;
+import com.stock.management.kafka.producer.KafkaEventPublisher;
 import com.stock.management.order.domain.CustomerOrder;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -13,7 +14,10 @@ import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.stereotype.Component;
 
+
 import java.util.List;
+
+import static com.stock.management.kafka.config.KafkaTopics.DLT_TOPIC;
 
 @Slf4j
 @Component
@@ -21,6 +25,9 @@ import java.util.List;
 public class OrderEventConsumer {
 
     private final KafkaEventHandler eventHandler;
+	private final KafkaEventPublisher kafkaEventPublisher;
+
+
 
     // Batch listener : reçoit jusqu'à max.poll.records messages en un seul appel.
     // AllocationService traite tout le lot avec 1 seul appel DB (findAvailableSkusForAllocationWithLock).
@@ -39,35 +46,65 @@ public class OrderEventConsumer {
             @Header(KafkaHeaders.OFFSET) List<Long> offsets,
             Acknowledgment ack) {
 
-        log.info("[KAFKA] Received batch of {} orders — first: topic={} partition={} offset={}",
-                orderReceivedEvents.size(), topics.get(0), partitions.get(0), offsets.get(0));
-        try {
-			log.info("[KAFKA] print orderId {} ", orderReceivedEvents.get(0).getOrderId().toString());
-            eventHandler.handleOrderReceivedBatch(orderReceivedEvents);
+		log.info("[KAFKA] Received batch of {} orders — first: topic={} partition={} offset={}",
+			orderReceivedEvents.size(), topics.get(0), partitions.get(0), offsets.get(0));
+		try {
+			// 1. Tentative sur le lot complet (Batch)
+			eventHandler.handleOrderReceivedBatch(orderReceivedEvents);
 
+		} catch (Exception ex) {
+			log.warn("[KAFKA] Échec du batch (taille={}). Début du fallback unitaire avec retries. Cause: {}",
+				orderReceivedEvents.size(), ex.getMessage());
 
-			//Ce que fait réellement ack.acknowledge() en mode batch
-			//
-			//Avec ack-mode: manual_immediate + listener batch, ack.acknowledge() (ligne 43) ne commit pas les offsets un par un.
-			// Il fait un seul commit atomique qui dit au broker :
-			// "pour cette partition, tout ce qui est ≤ au dernier offset de ce batch est traité".
-			// Concrètement, si le batch contient les offsets [10, 11, 12] de la partition 0,
-			// un seul appel ack.acknowledge() commit 13 (le prochain offset à lire) pour cette partition — pas trois commits séparés 10, 11, 12.
-			//
-			//Pourquoi ça explique le comportement "tout ou rien" observé
-			//
-			//C'est exactement pour ça qu'un seul message défaillant dans le ba
-			//Et ack.acknowledge() (ligne 43) commite tous les offsets du batch d'un coup — c'est pour ça qu'un seul message qui échoue fait échouer (et rejouer) tout le batch entier au prochain restart,
-			//puisque ack.acknowledge() n'est jamais atteint si handleOrderReceivedBatch lève une exception.
+			// DANS VOTRE LISTENER (REPLI BATCH) ──────────────────────────────────────
+			for (int i = 0; i < orderReceivedEvents.size(); i++) {
+				OrderReceivedEvent event = orderReceivedEvents.get(i);
+				try {
+					// Exécute 3 tentatives espacées de 500ms
+					executeWithRetry(() -> eventHandler.handleOrderReceived(event), 3, 500);
+				} catch (Exception singleEx) {
+					log.error("[DLT ISOLATION] Échec définitif pour la commande {} (Offset: {}). Cause: {}",
+						event.getOrderId(), offsets.get(i), ex.getMessage());
 
-            ack.acknowledge(); // lorsqu'il est atteind on passe a l'offset suivant
-        } catch (Exception ex) {
-            log.error("[KAFKA] Batch processing failed size={} : {}", orderReceivedEvents.size(), ex.getMessage());
-			// 🎯 OPTION A : Avancer l'offset de la partition au dernier offset du batch + 1 (pour sauter tout le batch bloquant)
+					kafkaEventPublisher.sendToDlt(DLT_TOPIC, event.getOrderId().toString(), event, ex);
+				}
+			}
+			//  Validation explicite de l'offset une fois TOUT le batch traité (hors de la boucle)
 			ack.acknowledge();
-            throw ex;
-        }
-    }
+		}
+	}
+
+
+	private void executeWithRetry(Runnable action, int maxAttempts, long backoffMs) throws Exception {
+		for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+			try {
+				action.run();
+				return; // Succès : sortie immédiate
+			} catch (Exception ex) {
+				if (attempt == maxAttempts) throw ex; // Dernier échec : on propage l'erreur vers le catch du DLT
+				Thread.sleep(backoffMs);
+			}
+		}
+	}
+
+	@KafkaListener(topics = "order.received-dlt", groupId = "order-dlt-group")
+	public void processDltMessages( @Payload List<OrderReceivedEvent> orderReceivedEvents, Acknowledgment ack) {
+		try {
+			log.warn("[DLT PROCESS] Traitement/Audit du message en échec : key={}");
+			// Sauvegarde dans une table de base de données d'audit ou notification Slack/Email
+		} catch (Exception ex) {
+			log.error("[DLT ERROR] Échec de traitement du DLT. Le message est ignoré pour éviter la boucle.", ex);
+		} finally {
+
+			ack.acknowledge();
+		}
+	}
+
+}
+
+
+
+
 
 	/*
     @KafkaListener(
@@ -203,4 +240,4 @@ public class OrderEventConsumer {
     }
 
 	 */
-}
+
