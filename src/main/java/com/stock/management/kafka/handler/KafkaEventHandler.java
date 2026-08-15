@@ -42,6 +42,14 @@ public class KafkaEventHandler {
         allocationService.allocate(orderReceivedEvents);
     }
 
+	public void handleOrderReceived(OrderReceivedEvent orderReceivedEvent) {
+		log.info("[HANDLER] order.received batch size={}", orderReceivedEvent.getEventId());
+		// before we start the process allocation we need to send a message
+		// to order to change the order status
+		allocationService.allocateSingleOrder(orderReceivedEvent);
+	}
+
+
 	/*
 	public void handleOrderReceived(OrderReceivedEvent event) {
 		log.info("[HANDLER] order.received orderId={} customerId={} lines={}",
