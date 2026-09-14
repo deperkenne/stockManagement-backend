@@ -1,0 +1,30 @@
+spring:
+  kafka:
+    bootstrap-servers: ${spring.embedded.kafka.brokers:192.168.178.27:9092}
+
+    consumer:
+      # groupe distinct de la prod — ne partage jamais d'offsets avec stock-management-group
+      group-id: ${KAFKA_CONSUMER_GROUP:stock-management-group-test}
+      # latest : un nouveau groupe ignore tout message publié AVANT son démarrage
+      # évite de relire les résidus laissés par un run de test précédent
+      auto-offset-reset: latest
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      max-poll-records: 50
+      properties:
+        # valeurs réduites pour des tests rapides (pas besoin d'attendre 50KB/500ms en test)
+        fetch.min.bytes: 1
+        fetch.max.wait.ms: 100
+        max.poll.interval.ms: 300000
+        session.timeout.ms: 30000
+        heartbeat.interval.ms: 10000
+        spring.json.trusted.packages: "com.stock.management.kafka.event"
+        spring.json.use.type.headers: true
+
+    listener:
+      type: batch
+      ack-mode: manual_immediate
+      concurrency: 1        # 1 seule partition sur le topic de test -> 1 seul thread utile
+      poll-timeout: 1000    # poll plus court pour accélérer les tests
+      missing-topics-fatal: false
