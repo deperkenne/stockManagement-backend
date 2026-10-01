@@ -5,6 +5,9 @@ public final class KafkaTopics {
     private KafkaTopics() {}
 
     public static final String ORDER_RECEIVED    = "order.received";
+	public static final String ORDER_RECEIVED_TEST03    = "order.received-test03";
+
+	public static final String DLT_TOPIC = "orders-dlt";
 
 	/*
     public static final String STOCK_ALLOCATED   = "stock.allocated";

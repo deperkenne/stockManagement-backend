@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+  <!-- ============================================= -->
+  <!-- Appender console général -->
+  <!-- ============================================= -->
+  <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - [%X{correlationId}] %msg%n</pattern>
+    </encoder>
+  </appender>
+
+
+
+
+  <!-- ============================================= -->
+  <!-- Appender dédié : Allocation (service métier) -->
+  <!-- ============================================= -->
+  <appender name="ALLOCATION_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+    <file>${user.home}/stock-management-logs/allocation.log</file>
+    <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+      <fileNamePattern>${user.home}/stock-management-logs/allocation.%d{yyyy-MM-dd}.log</fileNamePattern>
+      <maxHistory>7</maxHistory>
+    </rollingPolicy>
+    <encoder>
+      <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - [%X{correlationId}] %msg%n</pattern>
+    </encoder>
+  </appender>
+
+  <appender name="SKU_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+    <file>${user.home}/stock-management-logs/sku.log</file>
+    <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+      <fileNamePattern>${user.home}/stock-management-logs/sku.%d{yyyy-MM-dd}.log</fileNamePattern>
+      <maxHistory>7</maxHistory>
+    </rollingPolicy>
+    <encoder>
+      <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - [%X{correlationId}] %msg%n</pattern>
+    </encoder>
+  </appender>
+
+
+  <!-- ============================================= -->
+  <!-- Appender dédié : Kafka Consumers -->
+  <!-- ============================================= -->
+  <appender name="KAFKA_CONSUMER_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+    <file>${user.home}/stock-management-logs/kafka-consumer.log</file>
+    <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+      <fileNamePattern>${user.home}/stock-management-logs/kafka-consumer.%d{yyyy-MM-dd}.log</fileNamePattern>
+      <maxHistory>7</maxHistory>
+    </rollingPolicy>
+    <encoder>
+      <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - [%X{correlationId}] %msg%n</pattern>
+    </encoder>
+  </appender>
+
+  <appender name="ORDER_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+    <file>${user.home}/stock-management-logs/order.log</file>
+    <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+      <fileNamePattern>${user.home}/stock-management-logs/order.%d{yyyy-MM-dd}.log</fileNamePattern>
+      <maxHistory>7</maxHistory>
+    </rollingPolicy>
+    <encoder>
+      <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - [%X{correlationId}] %msg%n</pattern>
+    </encoder>
+  </appender>
+
+  <!-- ============================================= -->
+  <!-- Appender dédié : Kafka Producer/Publisher -->
+  <!-- (optionnel, si vous avez aussi un package kafka.producer) -->
+  <!-- ============================================= -->
+  <appender name="KAFKA_PRODUCER_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+    <file>${user.home}/stock-management-logs/kafka-producer.log</file>
+    <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+      <fileNamePattern>${user.home}/stock-management-logs/kafka-producer.%d{yyyy-MM-dd}.log</fileNamePattern>
+      <maxHistory>7</maxHistory>
+    </rollingPolicy>
+    <encoder>
+      <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - [%X{correlationId}] %msg%n</pattern>
+    </encoder>
+  </appender>
+
+  <!-- ============================================= -->
+  <!-- Loggers par package -->
+  <!-- ============================================= -->
+
+  <!-- Allocation : AllocationService, AllocationRetryService, AllocationRetryListener -->
+  <logger name="com.stock.management.allocation" level="DEBUG" additivity="false">
+    <appender-ref ref="ALLOCATION_FILE"/>
+    <appender-ref ref="CONSOLE"/>
+  </logger>
+
+  <logger name="com.stock.management.sku" level="DEBUG" additivity="false">
+    <appender-ref ref="SKU_FILE"/>
+    <appender-ref ref="CONSOLE"/>
+  </logger>
+
+  <logger name="com.stock.management.order" level="DEBUG" additivity="false">
+    <appender-ref ref="ORDER_FILE"/>
+    <appender-ref ref="CONSOLE"/>
+  </logger>
+
+
+  <!-- Kafka Consumers : OrderEventConsumer, OrderEventConsumerTest -->
+  <logger name="com.stock.management.kafka.consumer" level="DEBUG" additivity="false">
+    <appender-ref ref="KAFKA_CONSUMER_FILE"/>
+    <appender-ref ref="CONSOLE"/>
+  </logger>
+
+  <!-- Kafka Producer (si applicable) -->
+  <logger name="com.stock.management.kafka.producer.KafkaEventPublisher" level="DEBUG" additivity="false">
+    <appender-ref ref="KAFKA_PRODUCER_FILE"/>
+    <appender-ref ref="CONSOLE"/>
+  </logger>
+
+  <!-- ============================================= -->
+  <!-- Root logger : tout le reste -->
+  <!-- ============================================= -->
+  <root level="INFO">
+    <appender-ref ref="CONSOLE"/>
+  </root>
+
+</configuration>

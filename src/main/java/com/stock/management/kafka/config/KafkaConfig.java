@@ -3,11 +3,15 @@ package com.stock.management.kafka.config;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.admin.NewTopic;
+import org.apache.kafka.common.PartitionInfo;
+import org.apache.kafka.common.TopicPartition;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.annotation.EnableKafka;
+
 import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
 import org.springframework.kafka.config.TopicBuilder;
 import org.springframework.kafka.core.ConsumerFactory;
@@ -17,6 +21,11 @@ import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
 import org.springframework.kafka.listener.DefaultErrorHandler;
 import org.springframework.util.backoff.ExponentialBackOff;
 
+
+import java.lang.reflect.InvocationTargetException;
+import java.util.List;
+
+@Slf4j
 @EnableKafka
 @Configuration
 public class KafkaConfig {
@@ -73,25 +82,53 @@ public class KafkaConfig {
 
     // ─── Error handling / DLT ────────────────────────────────────────────────────
 
-    @Bean
-    public DefaultErrorHandler errorHandler(KafkaTemplate<?, ?> kafkaTemplate) {
-        // Exponential backoff: 1s initial, 2x multiplier, max 10s
-        ExponentialBackOff backOff = new ExponentialBackOff(1_000L, 2.0);
-        backOff.setMaxElapsedTime(10_000L);
+	@Bean
+	public DefaultErrorHandler errorHandler(KafkaTemplate<?, ?> kafkaTemplate) {
+		// Exponential backoff: 1s initial, 2x multiplier, max 10s
+		ExponentialBackOff backOff = new ExponentialBackOff(1_000L, 2.0);
+		backOff.setMaxElapsedTime(10_000L);
 
-        DeadLetterPublishingRecoverer recoverer =
-                new DeadLetterPublishingRecoverer(kafkaTemplate);
 
-        DefaultErrorHandler handler = new DefaultErrorHandler(recoverer, backOff);
+		//  Option A : Retourner un TopicPartition sans spécifier la partition (constructeur à 1 argument)
+		// En ne passant pas le 2ème argument 'int', Kafka utilisera le partitionnement par défaut (Key Hash / Round-Robin)
+		DeadLetterPublishingRecoverer recoverer = new DeadLetterPublishingRecoverer(
+			kafkaTemplate,
+			(record, ex) -> {
+				String dltTopic = record.topic() + "-dlt";
 
-        // Non-retryable exceptions go straight to DLT
-        handler.addNotRetryableExceptions(
-                IllegalArgumentException.class,
-                NullPointerException.class
-        );
+				//  Récupération dynamique du nombre de partitions via le KafkaTemplate :
+				List<PartitionInfo> partitions = kafkaTemplate.partitionsFor(dltTopic);
+				int partitionCount = partitions != null ? partitions.size() : 1;
 
-        return handler;
-    }
+				// Calcul du hash de la clé (Exemple explicite)
+				int targetPartition = 0;
+				if (record.key() != null) {
+					targetPartition = Math.abs(record.key().hashCode()) % partitionCount;
+				}
+
+				return new TopicPartition(dltTopic, targetPartition);
+			}
+		);
+
+		DefaultErrorHandler handler = new DefaultErrorHandler(recoverer, backOff);
+
+		// 3. Exceptions NON-RETRYABLE (Redirection immédiate vers le DLT)
+		handler.addNotRetryableExceptions(
+			IllegalArgumentException.class,
+			IllegalStateException.class,
+			NullPointerException.class,
+			InvocationTargetException.class // ⚠️ Indispensable en raison du dispatch par réflexion
+		);
+
+		// 4. (Optionnel) Listener de logs à chaque tentative de Retry
+		handler.setRetryListeners((record, ex, attempt) ->
+			log.warn("\u001B[34m[KAFKA RETRY]\u001B[0m Échec tentative #{} pour le message key={} sur topic={}. Cause: {}",
+				attempt, record.key(), record.topic(), ex.getMessage())
+
+		);
+
+		return handler;
+	}
 
     // ─── Topics ──────────────────────────────────────────────────────────────────
 
@@ -105,6 +142,18 @@ public class KafkaConfig {
                 .config("compression.type", "snappy")
                 .build();
     }
+
+	@Bean
+	public NewTopic orderReceivedTestTopic() {
+		return TopicBuilder.name(KafkaTopics.ORDER_RECEIVED_TEST03)
+			.partitions(1)
+			.replicas(replicationFactor)
+			.config("retention.ms", "1")
+			.config("segment.ms", "1")       // force un roulement de segment toutes les 100ms
+			.config("cleanup.policy", "delete")
+			.config("compression.type", "snappy")
+			.build();
+	}
 
 
 

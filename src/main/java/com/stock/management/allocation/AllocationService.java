@@ -36,57 +36,14 @@ import static com.stock.management.allocationLine.AllocationItemStatus.NOT_ALLOC
 @RequiredArgsConstructor
 public class AllocationService {
     private final OrderRepository orderRepository;
-    private final SkuRepository skuRepository;
+   // private final SkuRepository skuRepository;
     private final AllocationItemService allocationItemService; // avoid to depend on implementation detail
     @Lazy
-    private final OrderService orderService; // avoid to depend on implementation detail
+	private final OrderService orderService; // avoid to depend on implementation detail
 	@Lazy
 	private final SkuService skuService; // avoid to depend on implementation detail
 
 
-    // ─── Entrée batch ─────────────────────────────────────────────────────────────
-    //
-    // 1 seul appel DB pour tout le batch → traitement en mémoire → flush unique.
-    // Priorité : HIGH consomme le stock avant NORMAL/LOW dans le même batch.
-    // Anti-deadlock : findAvailableSkusForAllocationWithLock trie par productNr ASC.
-
-
-
-    /**
-    @Transactional
-    public void allocateBatch(List<OrderReceivedEvent> events) {
-		log.info("start order allocation");
-        orderChangeStatus(events,OrderStatus.IN_PROGRESS);
-		//kafkaEventPublisher.publishOrderINPROGRESS(events);
-        log.info("[ALLOC] batch size={}", events.size());
-
-        List<String> skuCodes = events.stream()
-                .flatMap(e -> e.getLines().stream())
-                .map(OrderReceivedEvent.OrderLine::getSku)
-                .distinct()
-			    .sorted()
-                .collect(Collectors.toList());
-
-        List<Sku> allSkus = skuRepository.findAvailableSkusForAllocationWithLock(skuCodes);
-
-        Map<String, List<Sku>> stockMap = allSkus.stream()
-                .collect(Collectors.groupingBy(s -> s.getProductNr().getValue()));
-
-        List<OrderReceivedEvent> sorted = events.stream()
-                .sorted(Comparator.comparingInt(
-                        (OrderReceivedEvent e) -> priorityOrdinal(e.getPriority())).reversed())
-                .collect(Collectors.toList());
-
-        for (OrderReceivedEvent event : sorted) {
-            processOrder(event, stockMap);
-        }
-    }
-**/
-
-
-
-
-	// ─── Entrée unitaire ──────────────────────────────────────────────────────────
 
 	/**
 	 * REQUIRES_NEW : appelée en appel direct depuis OrderService.receiveOrder() (et depuis
@@ -96,41 +53,53 @@ public class AllocationService {
 	 */
 	@Transactional
 	public void allocate(List<OrderReceivedEvent> events) {
-		log.info("start order allocation", events.get(0).getOrderId());
 
+		log.info("start order allocation- aalo={}, name={}", events.get(0).getOrderId(),events.getFirst().getLines().getFirst().getSku().toString());
 
-		/* mes en ordre les skuCodes afin d'eviter les deadLock  entre transaction
-		List<String> skuCodes = events.stream()
-			.flatMap(e -> e.getLines().stream())
-			.map(OrderReceivedEvent.OrderLine::getSku)
-			.distinct()
-			.sorted()
-			.collect(Collectors.toList());
-
-		// recupere tous les sku et block ses ligne de sorte a ce que les autres transaction ne puisse pas acceder
-		// attention cei vas echouer si la donner n'est pas persistente quand on vas redemarer le serveur et les consummer kafka vons
-		// redemarer automatiquement
-		// si on utilise H2 sa vas planter car la donnee ne serra plus memoire  au moment ou les consummer kafka vont rejouer cette methode
-		List<Sku> allSkus = skuRepository.findAvailableSkusForAllocationWithLock(skuCodes);
-
-		Map<String, List<Sku>> stockMap = allSkus.stream()
-			.collect(Collectors.groupingBy(s -> s.getProductNr().getValue()));
-
-		List<OrderReceivedEvent> sorted = events.stream()
-			.sorted(Comparator.comparingInt(
-				(OrderReceivedEvent e) -> priorityOrdinal(e.getPriority())).reversed())
-			.collect(Collectors.toList());
-        */
+		if(events.isEmpty()){
+			log.warn("aucun order diponible................ ");
+			return;
+		}
 
 		//1. Verrouillage & chargement du stock (Délégué)
 		Map<String, List<Sku>> stockMap = skuService.lockAndFetchAvailableStock(events);
+		log.warn("[SKU verfügbar ]- skusSize={}", stockMap.size());
+		if (stockMap.isEmpty()){
+			log.warn("aucun sku disponible................ ");
+			return;
+		}
 
-		// 2. Ordonnancement des commandes selon les règles métier (Délégué)
+		log.info("[ALLOC SKU size]- sku={}",stockMap.size());
+		List<UUID> batchOrderUuidIds = events.stream()
+			.map(event -> UUID.fromString(event.getOrderId())) // 👈 Conversion String -> UUID
+			.toList();
+		Set<UUID> alreadyAllocatedIds = new HashSet<>(
+			allocationItemService.findAlreadyAllocatedOrderIds(batchOrderUuidIds)
+		);
+
+		// Filtrage en RAM (nanosecondes) : conserve uniquement les nouvelles commandes
+		List<OrderReceivedEvent> filtedEventsToProcess = OrderReceivedEvent.newEventsToProcess(events,alreadyAllocatedIds);
+
+		//  Ordonnancement des commandes selon les règles métier (Délégué)
 		List<OrderReceivedEvent> prioritizedEvents = OrderReceivedEvent.sortByPriority(events);
-
 		for (OrderReceivedEvent event : prioritizedEvents) {
+			log.info("order-information - orderPriority={} ", event.getPriority());
 			processOrder(event, stockMap);
 		}
+	}
+
+
+	/**
+	 * Traitement unitaire : Ouvre une NOUVELLE transaction indépendante pour chaque commande.
+	 * Si cette méthode plante et fait un rollback, elle n'impacte PAS les commandes précédentes déjà committées.
+	 */
+	@Transactional(propagation = Propagation.REQUIRES_NEW)
+	public void allocateSingleOrder(OrderReceivedEvent event){
+
+		Map<String, List<Sku>> stockMap = skuService.fetchAvailableStock(event);
+		processOrder(event,stockMap);
+
+
 	}
 
 
@@ -142,8 +111,6 @@ public class AllocationService {
 			.collect(Collectors.toList());
 		orderRepository.updateStatusForIds(domainOrderIds,orderStatus);
 	}
-
-
 
 
 
@@ -159,6 +126,7 @@ public class AllocationService {
 		/**
 		 * S de SOLID : La validation "Tout ou Rien" est isolée
 		 */
+
 		if (event.isCompleteDeliveryRequired() && !isCompleteDeliveryPossible(event, stockMap)) {
 			log.info("change status complete delevryry equals true");
 			orderService.handleCompleteDeliveryFailure(orderIdObj);
@@ -173,6 +141,7 @@ public class AllocationService {
 		int partialLines = 0;
 
 		// Parcours et traitement des lignes
+
 		for (OrderReceivedEvent.OrderLine line : event.getLines()) {
 			String productNrStr = line.getSku();
 			int requestedQty = line.getQuantity();
@@ -180,15 +149,20 @@ public class AllocationService {
 
 			List<Sku> skus = stockMap.getOrDefault(productNrStr, List.of()); // recupere tous les sku destiner a cette ligne
 
-			List<LineAllocation> lineAllocs = Helper.greedyAllocate(skus, requestedQty); // greedyAllocated
+			if (isLineToSkip(line)) {
+				System.out.println("error: change status when it always with canceled or full-allocated not possible!!!");
+				continue; // Saut immédiat à l'élément suivant (0 coût CPU !)
+			}
 
+			List<LineAllocation> lineAllocs = Helper.greedyAllocate(skus, requestedQty); // greedyAllocated
 			int totalAllocated = lineAllocs.stream().mapToInt(LineAllocation::qty).sum();
 
 			/**
 			 * CAS 1 : AUCUN STOCK ALLOUÉ
 			 * si le totalAllocated == 0 alors la ligne n'a pas etet allouer
 			 */
-			if (totalAllocated == 0) {
+			if (lineAllocs.isEmpty() || totalAllocated == 0) {
+				log.warn("aucune allocation dispo");
 				completelyFailedLines++; // ceci vas nous aider a voir see ont peut passer orderstatus a FAILLED si completelyFailedLines = lines.size()
 				lineItemStatusMap.put(lineIdUuid, LineItemStatus.NOT_ALLOCATED); // reservation de la  ligne qui n'a pas ete allouer dans un bacht ou list pour changer leur status
 				//allocated.add(buildFailedAllocationItem(event, line, requestedQty));
@@ -200,21 +174,28 @@ public class AllocationService {
 			 * reserver dans le batch ou list les lignes allouer pour les stocker dans la table allocationItem une seule fois et
 			 * eviter les surcharge reseau et surcharge de connexion   (gain et optimatisation car on regroupe et on alloue)
 			 */
-			for (LineAllocation la : lineAllocs) {
-				la.sku().reserve(new Quantity(la.qty()));
-				allocated.add(buildSuccessAllocationItem(event, line, la, la.qty())); // reserver dans le batch ou liste les ligne allouer
+			for (LineAllocation lineAllocation : lineAllocs) {
+				lineAllocation.sku().reserveQty(new Quantity(lineAllocation.qty()));
+				log.warn("[ALLOC] Allocation —  allocated={}  orderId={} orderPrio={}" ,
+					lineAllocation.qty(),event.getOrderId(),event.getPriority());
+				allocated.add(buildSuccessAllocationItem(event, line, lineAllocation, lineAllocation.qty())); // reserver dans le batch ou liste les ligne allouer
 			}
 
 			/**
+			 *
 			 * CAS 2 : ALLOCATION PARTIELLE
 			 * resrever le status de la ligne  qui n'a pas ete totalement allouer  pour la modifier dans la table order
 			 * verification s'il y'a eu reste qui n'a pas ete allouer  ensuite le stocker le reste dans le batch ou list
 			 */
 			if (totalAllocated < requestedQty) {
-				log.warn("[ALLOC] Partial — orderId={} sku={} needed={} got={}", event.getOrderId(), line.getOrderLineItemId(), requestedQty, totalAllocated);
+				log.warn("[ALLOC] Partial — orderId={} sku={} needed={} got={} orderPriority={}",
+					event.getOrderId(), line.getOrderLineItemId(), requestedQty, totalAllocated,event.getPriority());
+
 				partialLines++; // important car si partial passe au moins a 1 alors l'order aurras le status Partial
 
 				lineItemStatusMap.put(lineIdUuid, LineItemStatus.PARTIALLY_ALLOCATED); // reserver le status de la ligne dans un batch
+
+				// reservation du reste de la qty de la ligne qui n'a pas ete totalement allouer
 				allocated.add(buildPartialAllocationItem(event, line, requestedQty - totalAllocated));
 			}
 			/**
@@ -226,16 +207,14 @@ public class AllocationService {
 		}
 
 		/**
-		 * S de SOLID : Mise à jour des statuts des lignes via ta méthode optimisée Map<UUID, Status>
-		 */
-		orderService.changeLineStatus(orderIdObj, lineItemStatusMap);
-
-		/**
 		 * DRY / SOLID : Détermination et mise à jour du statut global
 		 */
 		OrderStatus finalStatus = determineGlobalOrderStatus(totalLines, completelyFailedLines, partialLines);
 		orderService.changeOrderStatus(orderIdObj, finalStatus);
-
+		/**
+		 * S de SOLID : Mise à jour des statuts des lignes via ta méthode optimisée Map<UUID, Status>
+		 */
+		orderService.changeLineStatus(orderIdObj, lineItemStatusMap);
 		notifyStockAllocated(allocated); // alloue toutes les ligne qui on ete completement allouer et celle qui ont eu un reste non allouer
 	}
 
@@ -249,6 +228,11 @@ public class AllocationService {
 	private boolean isCompleteDeliveryPossible(OrderReceivedEvent event , Map<String, List<Sku>> stockMap) {
 		return event.getLines().stream()
 			.allMatch(l -> totalAvailable(stockMap.get(l.getSku())) >= l.getQuantity());
+	}
+
+
+	private boolean isLineToSkip(OrderReceivedEvent.OrderLine line){
+		return !(line.getStatus().equals(LineItemStatus.PENDING) || line.getStatus().equals(LineItemStatus.NOT_ALLOCATED));
 	}
 
 	private AllocationItem buildFailedAllocationItem(CustomerOrder order, LineItem line, int requestedQty) {
@@ -265,7 +249,7 @@ public class AllocationService {
 
 	private AllocationItem buildSuccessAllocationItem(OrderReceivedEvent orderReceivedEvent,OrderReceivedEvent.OrderLine line, LineAllocation la, int requestedQty) {
 		return AllocationItem.builder()
-			.orderId(UUID.fromString(orderReceivedEvent.getEventId()))
+			.orderId(UUID.fromString(orderReceivedEvent.getOrderId()))
 			.skuId(UUID.fromString(la.sku().getId().getValue().toString()))
 			.lineItemId(UUID.fromString(line.getOrderLineItemId()))
 			.productNr(new ProductNr(line.getSku()))
@@ -277,7 +261,7 @@ public class AllocationService {
 
 	private AllocationItem buildPartialAllocationItem(OrderReceivedEvent orderReceivedEvent,OrderReceivedEvent.OrderLine line, int shortage) {
 		return AllocationItem.builder()
-			.orderId(UUID.fromString(orderReceivedEvent.getEventId()))
+			.orderId(UUID.fromString(orderReceivedEvent.getOrderId()))
 			.skuId(null)
 			.lineItemId(UUID.fromString(line.getOrderLineItemId()))
 			.productNr(new ProductNr(line.getSku()))
@@ -289,7 +273,7 @@ public class AllocationService {
 
 	private OrderStatus determineGlobalOrderStatus(int totalLines, int completelyFailedLines, int partialLines) {
 		if (completelyFailedLines == totalLines) {
-			return OrderStatus.PENDIND_STOCK;
+			return OrderStatus.ALLOCATION_FAILED;
 		} else if (completelyFailedLines > 0 || partialLines > 0) {
 			return OrderStatus.PARTIALLY_ALLOCATED;
 		} else {
@@ -333,8 +317,12 @@ public class AllocationService {
     // ─── Notification directe (remplace l'ancienne publication Kafka) ─────────────
 
     private void notifyStockAllocated(List<AllocationItem> allocationItems) {
-        allocationItemService.onStockAllocated(allocationItems);
-        log.info("[ALLOC] stock.allocated —  lines={}",  allocationItems.size());
+		if(!allocationItems.isEmpty()) {
+			log.info("\u001B[36m[ALLOCSTART]\u001B[0m ALLOCATION {} événement(s)", allocationItems.get(0).getOrderId());
+
+			allocationItemService.onStockAllocated(allocationItems);
+			log.info("\u001B[36m[ALLOC] \u001B[0m Allocation succeed—  lines={}", allocationItems.size());
+		}
     }
 
     // ─── Type interne ─────────────────────────────────────────────────────────────

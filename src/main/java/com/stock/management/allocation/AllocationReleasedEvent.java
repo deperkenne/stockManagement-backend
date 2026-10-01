@@ -1,4 +1,8 @@
 package com.stock.management.allocation;
 
-public record AllocationReleasedEvent() {
+import com.stock.management.allocationLine.AllocationItem;
+
+import java.util.List;
+
+public record AllocationReleasedEvent(List<AllocationItem> allocationItems) {
 }

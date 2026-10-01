@@ -10,11 +10,8 @@ import java.util.Set;
 @Component
 public class OrderValidator {
 
-    public void validate(CreateOrderRequest request) {
-        validateNoDuplicateProductNr(request);
-    }
 
-    private void validateNoDuplicateProductNr(CreateOrderRequest request) {
+    public void validateNoDuplicateProductNr(CreateOrderRequest request) {
         Set<String> seen = new HashSet<>();
         for (LineItemRequest li : request.lineItems()) {
             String normalized = li.productNr().trim().toUpperCase();

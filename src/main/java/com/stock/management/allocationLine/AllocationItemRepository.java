@@ -1,6 +1,8 @@
 package com.stock.management.allocationLine;
 
 import com.stock.management.order.domain.AllocationStatus;
+import com.stock.management.order.domain.CustomerOrder;
+import com.stock.management.order.domain.OrderId;
 import com.stock.management.order.domain.ProductNr;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
@@ -23,12 +25,27 @@ public interface AllocationItemRepository extends JpaRepository<AllocationItem, 
 	 */
 	List<AllocationItem> findAllByLineItemIdInAndSkuIdNotNull(List<UUID> lineItemIds);
 
+	@Query("SELECT a FROM AllocationItem a WHERE a.orderId = :orderId")
+	List<AllocationItem> findAlreadyAllocatedOrderId(@Param("orderId") UUID orderId);
+
+	@Query("SELECT a.orderId FROM AllocationItem a WHERE a.orderId IN :orderIds")
+	List<UUID> findAlreadyAllocatedOrderIds(@Param("orderIds") List<UUID> orderIds);
+
+	@Query("SELECT a FROM AllocationItem a WHERE a.orderId IN :orderIds")
+	List<AllocationItem> findAlreadyAllocatedOrders(@Param("orderIds") List<UUID> orderIds);
+	/**
+	 * Récupère toutes les allocations correspondant à la liste d'identifiants de lignes.
+	 *
+	 * @param lineItemIds Collection des identifiants de lignes à rechercher.
+	 * @return La liste des AllocationItem correspondants.
+	 */
+	List<AllocationItem> findAllByLineItemIdIn(List<UUID> lineItemIds);
 
 	/**
 	 * Annule toutes les lignes d'allocation associées à une commande spécifique.
 	 * Passe leur statut à 'CANCELLED' en une seule requête SQL.
 	 */
-	@Modifying(clearAutomatically = true)
+	@Modifying(flushAutomatically = true, clearAutomatically = true) // 🟢 flush() AVANT, clear() APRÈS
 	@Query("""
       UPDATE AllocationItem a
       SET a.status = :cancelled, a.updatedAt = :now
@@ -57,13 +74,13 @@ public interface AllocationItemRepository extends JpaRepository<AllocationItem, 
 	 */
 	@Query("""
        SELECT a FROM AllocationItem a
-       WHERE a.productNr IN :productNrs
+       WHERE a.productNr.value IN :productNrs
        AND (a.skuId IS NULL OR a.remainingQuantity > 0)
        AND a.status = :status
        """)
 	List<AllocationItem> findWaitingItemsByProductNrs(
 		@Param("productNrs") List<String> productNrs,
-		@Param("status") AllocationItemStatus waitingStock);
+		@Param("status") AllocationItemStatus status);
 
 	/** Marks stale WAITING/NOT_ALLOCATED records as deleted before fresh allocation creates new ones. */
 	@Modifying(clearAutomatically = true)

@@ -10,6 +10,7 @@ import java.util.Map;
 public class Helper {
 
 	public static List<LineAllocation> greedyAllocate(List<Sku> skus, int needed) {
+
 		List<LineAllocation> result = new ArrayList<>();
 		int remaining = needed;
 		for (Sku sku : skus) {
@@ -22,5 +23,7 @@ public class Helper {
 		}
 		return result;
 	}
+
+
 
 }

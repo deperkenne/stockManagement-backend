@@ -7,9 +7,11 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 public interface OrderRepository extends JpaRepository<CustomerOrder, OrderId> {
 
@@ -20,6 +22,7 @@ public interface OrderRepository extends JpaRepository<CustomerOrder, OrderId> {
      */
     @Query("SELECT o.status FROM CustomerOrder o WHERE o.id = :id")
     Optional<OrderStatus> findStatusById(@Param("id") OrderId id);
+
 
     /**
      * Mise à jour ciblée du statut d'une commande (utilisée par le flux d'allocation).
@@ -65,6 +68,9 @@ public interface OrderRepository extends JpaRepository<CustomerOrder, OrderId> {
     @Query("SELECT DISTINCT o FROM CustomerOrder o LEFT JOIN FETCH o.lineItems WHERE o.id = :id")
     Optional<CustomerOrder> findByIdWithLineItems(@Param("id") OrderId id);
 
+	@Query("SELECT DISTINCT o FROM CustomerOrder o LEFT JOIN FETCH o.lineItems WHERE o.id IN :ids")
+	List<CustomerOrder> findAllByIdsWithLineItems(@Param("ids") List<OrderId> ids);
+
     /**
      * Charge la commande AVEC ses lignes, verrouillée en écriture (PESSIMISTIC_WRITE), en une seule requête.
      * Utilisée pour toute mutation de l'agrégat (annulation totale ou partielle) : un seul aller-retour
@@ -76,23 +82,48 @@ public interface OrderRepository extends JpaRepository<CustomerOrder, OrderId> {
     @Query("SELECT DISTINCT o FROM CustomerOrder o LEFT JOIN FETCH o.lineItems WHERE o.id = :id")
     Optional<CustomerOrder> findByIdWithLineItemsForUpdate(@Param("id") OrderId id);
 
+	@Query("SELECT DISTINCT o FROM CustomerOrder o LEFT JOIN FETCH o.lineItems " +
+		"WHERE o.id = :id AND o.status NOT IN :excludedStatuses")
+	List<CustomerOrder> findModifiableOrderWithLineItems(
+		@Param("productNrs") List<String> productNrs,
+		@Param("excludedStatuses") List<OrderStatus> excludedStatuses);
+
+	@Query("SELECT DISTINCT o FROM CustomerOrder o LEFT JOIN FETCH o.lineItems li " +
+		"WHERE li.productNr.value IN :productNrs AND o.status NOT IN :excludedStatuses")
+	List<CustomerOrder> findModifiableOrderWithLineItem(
+		@Param("productNrs") List<String> productNrs,
+		@Param("excludedStatuses") List<OrderStatus> excludedStatuses);
+
+
+	@Query("""
+        SELECT DISTINCT o FROM CustomerOrder o
+        JOIN FETCH o.lineItems li
+        WHERE li.productNr.value IN :productNrs
+        AND li.status = :status
+        """)
+	List<CustomerOrder> findOrdersHavingLineStatus(
+		@Param("productNrs") List<String> productNrs,
+		@Param("status") LineItemStatus status
+	);
+
     /**
      * Commandes dans un statut donné dont au moins une ligne concerne un des productNr fournis.
      * Utilisée par AllocationRetryService pour rejouer les commandes ALLOCATION_FAILED après réapprovisionnement.
      * EXISTS garantit que TOUTES les lignes sont chargées (JOIN FETCH), pas seulement celles qui correspondent.
      */
-    @Query("""
-            SELECT DISTINCT o FROM CustomerOrder o
-            JOIN FETCH o.lineItems
-            WHERE o.status = :status
-            AND EXISTS (
-                SELECT l FROM LineItem l
-                WHERE l.customerOrder = o
-                AND l.productNr.value IN :productNrs
-            )
-            """)
+
+	//@Lock(LockModeType.PESSIMISTIC_WRITE)
+	//@Transactional(readOnly = true) // <-- Assure la transaction au niveau du Repository
+	@Query("""
+        SELECT DISTINCT o FROM CustomerOrder o
+        JOIN o.lineItems item
+        WHERE item.productNr.value IN :productNrs
+        AND (
+            o.status = 'ALLOCATION_FAILED'
+            OR (o.status = 'PARTIALLY_ALLOCATED' AND item.status = 'NOT_ALLOCATED')
+        )
+    """)
     List<CustomerOrder> findByStatusAndLineProductNrs(
-            @Param("status") OrderStatus status,
             @Param("productNrs") List<String> productNrs
     );
 }

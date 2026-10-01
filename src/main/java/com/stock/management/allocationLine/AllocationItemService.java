@@ -23,11 +23,25 @@ public class AllocationItemService {
 
 	private final AllocationItemRepository allocationItemRepository;
 
+    public AllocationItem Save (AllocationItem allocationItem){
+		  return allocationItemRepository.save(allocationItem);
+	}
 
 	public List<AllocationItem> findAllByLineItemIdInAndSkuIdNotNull(List<UUID>items){
 		return allocationItemRepository.findAllByLineItemIdInAndSkuIdNotNull(items);
 	}
 
+	public List<UUID> findAlreadyAllocatedOrderIds(List<UUID>items){
+		return  allocationItemRepository.findAlreadyAllocatedOrderIds(items);
+	}
+
+	public List<AllocationItem> findWaitingItemsByProductNrs(List<String>items,AllocationItemStatus status){
+		return allocationItemRepository.findWaitingItemsByProductNrs(items,status);
+	}
+
+	public List<AllocationItem> findAllByLineItemIdIn(List<UUID>items){
+		return allocationItemRepository.findAllByLineItemIdIn(items);
+	}
 
 	public void changeAllocationItemStatus(List<UUID> items){
 

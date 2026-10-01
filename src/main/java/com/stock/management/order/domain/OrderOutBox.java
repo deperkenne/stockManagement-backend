@@ -9,7 +9,6 @@ import java.util.UUID;
 @Entity
 @Table(name = "order_outbox")
 @Getter
-@Setter
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
@@ -45,5 +44,26 @@ public class OrderOutBox {
 	public enum OutboxStatus {
 		PENDING, SENT, FAILED
 	}
+
+	public void changeStatusToSent(OutboxStatus status){
+		this.status = status;
+	}
+
+	public void updateTime(){
+		this.processedAt = LocalDateTime.now();
+	}
+
+	public void updateRetryCount(int retryCount){
+		this.retryCount = retryCount;
+	}
+
+	public void changeStatusToFailed(OutboxStatus status){
+		this.status = status;
+	}
+
+	public void changeLastError(String lastError){
+		this.lastError = lastError;
+	}
+
 
 }

@@ -2,6 +2,7 @@ package com.stock.management.allocation;
 
 import com.stock.management.allocationLine.AllocationItem;
 import com.stock.management.allocationLine.AllocationItemRepository;
+import com.stock.management.allocationLine.AllocationItemService;
 import com.stock.management.allocationLine.AllocationItemStatus;
 import com.stock.management.kafka.event.OrderReceivedEvent;
 import com.stock.management.kafka.event.StockReleasedEvent;
@@ -11,21 +12,28 @@ import com.stock.management.order.OrderRepository;
 import com.stock.management.order.domain.*;
 import com.stock.management.sku.SkuRepository;
 import com.stock.management.sku.domain.Sku;
+import com.stock.management.sku.dto.SkuResponse;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.EntityNotFoundException;
 import jakarta.persistence.LockModeType;
 import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.collections4.ListUtils;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * Replays orders that could not be fully allocated due to stock shortage.
@@ -48,12 +56,17 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class AllocationRetryService {
 
-    private final OrderRepository orderRepository;
+	private final TransactionTemplate transactionTemplate;
+	private final OrderRepository orderRepository;
     private final AllocationItemRepository allocationItemRepository;
 	private final ApplicationEventPublisher eventPublisher;
 	private final SkuRepository skuRepository;
+	private final AllocationService allocationService;
+	private final AllocationItemService allocationItemService;
 	@PersistenceContext
 	private final EntityManager entityManager;
+
+	private static final int CHUNK_SIZE = 5;
 
     /**
      * REQUIRES_NEW : point d'entrée public, isolé de la transaction appelante (typiquement
@@ -61,47 +74,98 @@ public class AllocationRetryService {
      * effet secondaire "best effort" : son échec ne doit jamais faire échouer l'annulation
      * qui vient de libérer le stock.
      */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void retryPendingOrders(List<AllocationItem> allocationItems) {
+
+	@Transactional(propagation = Propagation.REQUIRES_NEW)
+	public void retryPendingOrders(List<AllocationItem> allocationItems) {
+
+		List<CustomerOrder> orders = new ArrayList<>();
+
         if (allocationItems == null || allocationItems.isEmpty()) return;
 
 		// recuperation de tous les produitNr
-        List<String> productNrs = allocationItems.stream()
-            .map(line -> line.getProductNr().getValue())
-            .filter(p -> p != null && !p.isBlank())
-            .distinct()
-            .toList();
 
-        if (productNrs.isEmpty()) return;
+		List<String> productNrs = allocationItems.stream()
+			.map(item -> item.getProductNr().getValue())
+			.filter(p -> p != null && !p.trim().isEmpty())
+			.distinct()
+			.toList();
 
-        retryFailedOrders(productNrs);
-        retryWaitingLines(productNrs);
+        if (productNrs.isEmpty() || productNrs == null) return;
+
+
+
+
+		// 2. Exécution sécurisée dans une NOUVELLE transaction isolée
+		//transactionTemplate.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+
+		log.info("[RETRY-SERVICE] Début du rejeu pour {} produit(s).", productNrs.size());
+		retryFailedOrders(productNrs,orders);
+        // Transaction 1 : Commandes en échec complet
+		try {
+			retryFailedOrders(productNrs,orders);
+		    //	transactionTemplate.executeWithoutResult(status -> retryFailedOrders(productNrs,orders));
+		} catch (Exception ex) {
+			log.error("[RETRY-SERVICE-ERROR] Échec du rejeu complet : {}", ex.getMessage(), ex);
+		}
+
+        // Transaction 2 : Lignes partielles (Totalement indépendante de la Transaction 1)
+		try {
+			retryLinesForProducts(productNrs,orders);
+			//transactionTemplate.executeWithoutResult(status -> retryLinesForProducts(productNrs,orders));
+		} catch (Exception ex) {
+			log.error("[RETRY-SERVICE-ERROR] Échec du rejeu partiel : {}", ex.getMessage(), ex);
+		}
     }
 
     // ─── Case 1: ALLOCATION_FAILED ────────────────────────────────────────────────
 
-    private void retryFailedOrders(List<String> productNrs) {
+    private void retryFailedOrders(List<String> productNrs , List<CustomerOrder> orders) {
 
-
-
-        List<CustomerOrder> orders = orderRepository
-            .findByStatusAndLineProductNrs(OrderStatus.ALLOCATION_FAILED, productNrs);
-
-		// B. Verrou pessimiste uniquement sur la commande racine (évite l'exception Hibernate 7)
-		entityManager.lock(orders, LockModeType.PESSIMISTIC_WRITE);
+		log.info("\u001B[34m[FINDPRODUCT] getDATA TO REPO\u001B[0m");
+		 orders = orderRepository
+			.findModifiableOrderWithLineItem(productNrs,List.of(OrderStatus.FULLY_ALLOCATED,OrderStatus.CANCELLED));
 
         if (orders.isEmpty()) return;
 
+		List<CustomerOrder> filteredOrdersAllocationFail = orders.stream()
+			.filter(o -> o.getStatus() == OrderStatus.ALLOCATION_FAILED)  // adaptez le statut recherché
+			.toList();
+
+		log.info("[LISTORDERSIZE]- orderSize={}",filteredOrdersAllocationFail.size());
+
 		// publish orders to allocate
         log.info("[RETRY] {} ALLOCATION_FAILED orders eligible for full replay", orders.size());
+
 		// 2. Mapping de la liste de CustomerOrder vers List<OrderReceivedEvent>
-			List<OrderReceivedEvent> events = orders.stream()
-			.map(this::toOrderReceivedEvent)
-			.toList();
-		eventPublisher.publishEvent(events);
-       // orders.forEach(order -> safeRetry(order.getId().toString(), () -> republishFull(order)));
+		List<OrderReceivedEvent> events = mapOrderToOrderReceivedEvent(filteredOrdersAllocationFail);
+
+		log.info("\u001B[34m[CALL-ALLOCATION-SERVICE]  {}  start retry process\u001B[0m",events.size());
+
+		List<List<OrderReceivedEvent>> chunks = ListUtils.partition(events, CHUNK_SIZE);
+
+		for (List<OrderReceivedEvent> chunk : chunks) {
+			try {
+				// 🛡️ Transaction isolée pour ce chunk de 10 commandes
+				// ici nous avons un batch total en cas de rollback toute les commande s'annule
+				// donc probleme les clients vont se plaindres
+				// solution chunk  ont decoupe en petit morceau si un lot se pert on continue avec les autres sans du rollback
+				allocationService.allocate(chunk); // ici nous avons un batch total en cas de rollback toute les commande s'annule
+				log.info("allocation sucessfull............................");
+			} catch (Exception ex) {
+				log.error("[REPLAY CHUNK FAILED] Failed to allocate chunk of {} orders. Continuing with next chunk...",
+					chunk.size(), ex);
+				// Seules les 10 commandes de ce chunk font un rollback
+			}
+		}
+
     }
 
+
+	private List<OrderReceivedEvent> mapOrderToOrderReceivedEvent(List<CustomerOrder>orders){
+		return  orders.stream()
+				.map(this::toOrderReceivedEvent)
+				.toList();
+	}
 
 	// ─── Case 2: WAITING_STOCK / NOT_ALLOCATED (skuId=null) ──────────────────────
 	public void retryWaitingLines(List<String> productNrs) {
@@ -186,7 +250,7 @@ public class AllocationRetryService {
 
 			// allocation des qty en stock
 			for (LineAllocation la : lineAllocs) {
-				la.sku().reserve(new Quantity(la.qty()));
+				la.sku().reserveQty(new Quantity(la.qty()));
 			}
 
 
@@ -487,4 +551,287 @@ public class AllocationRetryService {
             log.error("[RETRY] Failed to re-queue orderId={}: {}", orderId, e.getMessage());
         }
     }
+
+
+	//  **+++++++++++++++++++++++++++++++++++++++++++++
+
+	public void retryLinesForProducts(List<String> productNrs,List<CustomerOrder>orders) {
+		List<RetryRecord> linesToReplay = collectReplayLines(productNrs,orders);
+
+		if (linesToReplay.isEmpty()) {
+			log.info("[RETRY] Aucune ligne à rejouer pour {}", productNrs);
+			return;
+		}
+
+		log.info("[collection] lineSize={}, productNr={} qty={}" , linesToReplay.size(),
+			linesToReplay.getFirst().productNr(),linesToReplay.getFirst().remainingQuantity());
+
+		Map<UUID, List<RetryRecord>> linesByOrder = linesToReplay.stream()
+			.collect(Collectors.groupingBy(RetryRecord::orderId));
+
+		linesByOrder.forEach(this::retryOrderSafely);
+
+		log.info("[RETRY-BATCH] {} commande(s) traitée(s), {} ligne(s) rejouée(s)",
+			linesByOrder.size(), linesToReplay.size());
+	}
+
+	/**
+	 * Union des deux sources de vérité :
+	 *  - AllocationItem déjà marqués WAITING_STOCK (retry classique)
+	 *  - OrderLineItem NOT_ALLOCATED sans AllocationItem associé (ligne "orpheline",
+	 *    jamais persistée lors de la 1ère tentative — cf. bug totalAllocated == 0)
+	 * afin de ne perdre aucune ligne, quel que soit l'état historique en base.
+	 */
+	private List<RetryRecord> collectReplayLines(List<String> productNrs,List<CustomerOrder>orders) {
+		List<RetryRecord> waitingAllocations = allocationItemRepository
+			.findWaitingItemsByProductNrs(productNrs, AllocationItemStatus.WAITING_STOCK)
+			.stream()
+			.map(RetryRecord::fromAllocationItem)
+			.toList();
+
+
+		Set<UUID> lineIdsAlreadyCovered = waitingAllocations.stream()
+			.map(RetryRecord::lineItemId)
+			.collect(Collectors.toSet());
+
+		List<RetryRecord> orphanLines = orderRepository
+			.findOrdersHavingLineStatus(productNrs, LineItemStatus.NOT_ALLOCATED)
+			.stream()
+			.flatMap(order -> extractOrphanLines(order, productNrs, lineIdsAlreadyCovered))
+			.toList();
+
+		return Stream.concat(waitingAllocations.stream(), orphanLines.stream()).toList();
+	}
+
+	private Stream<RetryRecord> extractOrphanLines(
+		CustomerOrder order,
+		List<String> productNrs,
+		Set<UUID> lineIdsAlreadyCovered) {
+
+		UUID orderId = order.getId().getValue();
+
+		return order.getLineItems().stream()
+			.filter(line -> line.getStatus() == LineItemStatus.NOT_ALLOCATED)
+			.filter(line -> productNrs.contains(line.getProductNr().getValue()))
+			.filter(line -> !lineIdsAlreadyCovered.contains(line.getId()))
+			.map(line -> RetryRecord.fromNeverAllocatedLine(orderId, line));
+	}
+
+	private void retryOrderSafely(UUID orderId, List<RetryRecord> lines) {
+		try {
+			replayOrderLinesTransactionally(orderId, lines);
+		} catch (Exception e) {
+			log.error("[RETRY-BATCH] Échec de traitement pour la commande {}", orderId, e);
+		}
+	}
+
+	//@Transactional(propagation = Propagation.REQUIRES_NEW)
+	public void replayOrderLinesTransactionally(UUID orderId, List<RetryRecord> lines) {
+		if(lines.isEmpty()){
+			log.info("lines muss not empty");
+			return;
+		}
+		CustomerOrder order = loadAndLockOrder(orderId);
+		log.info("[OrderId]- orderId={}",order.getId().getValue());
+		Map<String, List<Sku>> stockByProduct = lockAndGroupAvailableStock(lines);
+
+		log.info("[SKusAvailable]- skuSize={}",stockByProduct.size());
+        if(stockByProduct.isEmpty()){
+			log.info("Skus not available for this products");
+			return;
+		}
+		boolean anyLineFullyAllocated = false; // une aide  a decider si on devrais changer le status le line concerner et sa  commande
+		for (RetryRecord line : lines) {
+			anyLineFullyAllocated |= replayLine(order, line, stockByProduct);
+		}
+
+		// si true allors essayon de changer le status de la commande
+		if (anyLineFullyAllocated) {
+			promoteOrderStatusIfFullyAllocated(order, orderId);
+		}
+	}
+
+	private CustomerOrder loadAndLockOrder(UUID orderId) {
+		CustomerOrder order = orderRepository.findById(new OrderId(orderId))
+			.orElseThrow(() -> new OrderNotFoundException(orderId.toString()));
+		entityManager.lock(order, LockModeType.PESSIMISTIC_WRITE);
+		return order;
+	}
+
+	private Map<String, List<Sku>> lockAndGroupAvailableStock(List<RetryRecord> lines) {
+		List<Sku>skus = skuRepository.findAll();
+		skus.forEach(s -> log.info("[SKU DEPR]: productNr='{}', qty={} tqty={}",
+			s.getProductNr().getValue(), s.getAvailableQuantity(),s.getTotalQuantity()));
+
+		if (skus.isEmpty()){
+			log.info("empty sku list");
+		}
+
+		List<String> productNrs = lines.stream().map(RetryRecord::productNr).distinct().toList();
+		log.warn("[productnrs list]- productnrs={}",productNrs.getFirst());
+		if(productNrs.isEmpty()){
+			log.warn("productsNrs list is empty");
+			return null;
+		}
+		return skuRepository.findAvailableSkusForAllocationWithLock(productNrs).stream()
+			.collect(Collectors.groupingBy(sku -> sku.getProductNr().getValue()));
+	}
+
+	/**
+	 * Tente d'allouer une ligne (déjà en attente ou jamais allouée),
+	 * met à jour (ou crée) son AllocationItem, et propage le changement
+	 * de statut sur la ligne de commande si elle devient complète.
+	 *
+	 * @return true si la ligne vient de passer à FULLY_ALLOCATED
+	 */
+	private boolean replayLine(CustomerOrder order, RetryRecord line, Map<String, List<Sku>> stockByProduct) {
+		List<Sku> availableSkus = stockByProduct.getOrDefault(line.productNr(), List.of());
+		List<LineAllocation> allocations = Helper.greedyAllocate(availableSkus, line.remainingQuantity());
+		int allocatedQty = allocations.stream().mapToInt(LineAllocation::qty).sum();
+
+		if (allocatedQty == 0) {
+			return false; // toujours rien de dispo, on retentera au prochain cycle
+		}
+
+		reserveStock(allocations);
+
+		// essai la reallocation en dimuniant la qty
+		int stillMissing = line.remainingQuantity() - allocatedQty;
+		upsertAllocationItem(line, stillMissing,order,allocations);
+
+		if (stillMissing > 0) {
+			return false; // partiellement allouée : reste en attente
+		}
+
+		// change specific line status only
+		markLineAsFullyAllocated(order, line.lineItemId());
+		return true;
+
+	}
+
+	private void reserveStock(List<LineAllocation> allocations) {
+		allocations.forEach(a -> a.sku().reserveQty(new Quantity(a.qty())));
+	}
+
+
+	private AllocationItem buildSuccessAllocationItem(UUID orderId, RetryRecord retryRecord,
+													  LineAllocation la,int requestedQty) {
+		return AllocationItem.builder()
+			.orderId(orderId)
+			.skuId(UUID.fromString(la.sku().getId().getValue().toString()))
+			.lineItemId(UUID.fromString(retryRecord.lineItemId().toString()))
+			.productNr(new ProductNr(retryRecord.productNr()))
+			.status(AllocationItemStatus.ALLOCATED)
+			.quantity(requestedQty)
+			.remainingQuantity(0)
+			.build();
+	}
+
+	private AllocationItem buildPartialAllocationItem(UUID orderId,RetryRecord item, int shortage) {
+		return AllocationItem.builder()
+			.orderId(orderId)
+			.skuId(null)
+			.lineItemId(item.lineItemId())
+			.productNr(new ProductNr(item.productNr()))
+			.status(AllocationItemStatus.WAITING_STOCK)
+			.quantity(0)
+			.remainingQuantity(shortage)
+			.build();
+	}
+
+
+	private void reallocateNotLineAllo(List<LineAllocation>lineAllocations,RetryRecord item,
+									   int restQty , CustomerOrder order){
+
+		if (restQty == 0){
+			return; // stop le programme
+		}
+
+		// Structures de collecte de données unifiées
+		List<AllocationItem> allocated = new ArrayList<>();
+		Map<UUID, LineItemStatus> lineItemStatusMap = new HashMap<>();
+
+		for (LineAllocation lineAllocation : lineAllocations) {
+			lineAllocation.sku().reserveQty(new Quantity(lineAllocation.qty()));
+			allocated.add(buildSuccessAllocationItem(item.orderId(), item, lineAllocation, lineAllocation.qty())); // reserver dans le batch ou liste les ligne allouer
+		}
+
+		if (restQty > 0) {
+
+			lineItemStatusMap.put(item.lineItemId(), LineItemStatus.PARTIALLY_ALLOCATED); // reserver le status de la ligne dans un batch
+
+			// reservation du reste de la qty de la ligne qui n'a pas ete totalement allouer
+			allocated.add(buildPartialAllocationItem(item.orderId(), item, restQty));
+		}
+		/**
+		 * CAS 3 : ALLOCATION TOTALE
+		 */
+		else {
+			lineItemStatusMap.put(item.lineItemId(), LineItemStatus.FULLY_ALLOCATED);
+		}
+
+		notifyStockAllocated(allocated);
+
+		order.updateLineItemStatus(lineItemStatusMap);
+
+		promoteOrderStatusIfFullyAllocated(order,item.orderId());
+
+	}
+
+	private void notifyStockAllocated(List<AllocationItem> allocationItems) {
+		if(!allocationItems.isEmpty()) {
+			log.info("\u001B[36m[ALLOCSTART]\u001B[0m ALLOCATION {} événement(s)", allocationItems.get(0).getOrderId());
+
+			allocationItemService.onStockAllocated(allocationItems);
+			log.info("\u001B[36m[ALLOC] \u001B[0m Allocation succeed—  lines={}", allocationItems.size());
+		}
+	}
+
+
+
+	private void upsertAllocationItem(RetryRecord line,
+									  int remainingQty,
+									  CustomerOrder order,
+									  List<LineAllocation>lineAllocations) {
+		AllocationItem item = line.existingAllocationItem();
+		if (item != null) {
+			if (remainingQty == 0) {
+				// CAS TOTAL: ligne complètement allouée
+				// ici c'est non manager par hibernate donc nous devons save nous meme
+				item.resetRemainingQty(0);
+				item.changeStatus(AllocationItemStatus.ALLOCATED);
+				allocationItemRepository.save(item);
+				// item.markAllocated();
+			} else {
+				item.resetRemainingQty(remainingQty);
+			}
+			allocationItemRepository.save(item);
+		} else {
+           reallocateNotLineAllo(lineAllocations,line,remainingQty,order);
+		}
+	}
+
+	private AllocationItem lockExisting(AllocationItem item) {
+		entityManager.lock(item, LockModeType.PESSIMISTIC_WRITE);
+		return item;
+	}
+
+	private void markLineAsFullyAllocated(CustomerOrder order, UUID lineItemId) {
+		order.getLineItems().stream()
+			.filter(line -> line.getId().equals(lineItemId))
+			.findFirst()
+			.ifPresent(line -> line.changeLineStatus(LineItemStatus.FULLY_ALLOCATED));
+	}
+
+	private void promoteOrderStatusIfFullyAllocated(CustomerOrder order, UUID orderId) {
+		boolean allLinesAllocated = order.getLineItems().stream()
+			.allMatch(line -> line.getStatus() == LineItemStatus.FULLY_ALLOCATED);
+
+		if (allLinesAllocated) {
+			order.updateOrderStatus(OrderStatus.FULLY_ALLOCATED);
+			log.info("[RETRY-ORDER] Commande {} entièrement allouée", orderId);
+		}
+	}
+
+
 }

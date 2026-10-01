@@ -1,0 +1,72 @@
+spring:
+
+  logging:
+    # Emplacement et nom du fichier de log sur votre lecteur Z:
+    file:
+      name: C:/temp/app-logs/fintech-app-test.log
+    level:
+      # Affiche le moment exact où la transaction est marquée rollback-only et par qui
+      org.springframework.transaction: DEBUG
+      # Affiche les requêtes SQL et les erreurs Hibernate
+      org.hibernate.SQL: DEBUG
+      org.hibernate.orm.deprecation: ERROR
+    logback:
+      # Rotation des fichiers : taille max de 10 Mo par fichier, conservation sur 30 jours
+      rolling policy.max-file-size=10MB
+      rolling policy.max-history=30
+
+  kafka:
+    bootstrap-servers: ${spring.embedded.kafka.brokers:192.168.178.27:9092}
+    producer:
+      acks: all
+      retries: 3
+      compression-type: snappy
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 1
+        delivery.timeout.ms: 120000
+        request.timeout.ms: 30000
+        # est pour chaque File dans Memory buffer de kafka
+        linger.ms: 10
+        batch.size: 16384
+        # est un peu comme la liste d'attente ou queue pour les message qui n'ont pas pu etre envoyer a T= 0
+        buffer.memory: 33554432
+
+    consumer:
+      # groupe distinct de la prod — ne partage jamais d'offsets avec stock-management-group
+      # groupe UNIQUE à chaque démarrage de contexte de test — c'est CETTE unicité
+      # qui évite de relire les résidus d'un run précédent, pas le choix latest/earliest.
+      # Combiné à retention.ms=1 / segment.ms=1 sur le topic de test, les vieux
+      # messages sont de toute façon purgés côté broker en quelques secondes.
+      #group-id: stock-management-group-test-${random.uuid}
+      group-id: ${KAFKA_CONSUMER_GROUP:stock-management-group-test01}
+      test-group-id01: ${KAFKA_CONSUMER_GROUP_TEST:stock-management-group-test01}
+
+      # earliest : élimine la race condition où un message envoyé juste après le
+      # démarrage du contexte, mais avant que le consumer ait fini son assignation
+      # de partition, serait silencieusement perdu avec "latest" (jamais relu).
+      auto-offset-reset: earliest
+
+
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      max-poll-records: 50
+      properties:
+        # valeurs réduites pour des tests rapides (pas besoin d'attendre 50KB/500ms en test)
+        fetch.min.bytes: 50000
+        fetch.max.wait.ms: 500
+        max.poll.interval.ms: 300000
+        session.timeout.ms: 30000
+        heartbeat.interval.ms: 10000
+        spring.json.trusted.packages: "com.stock.management.kafka.event"
+        spring.json.use.type.headers: true
+
+    listener:
+      type: batch
+      ack-mode: manual_immediate
+      concurrency: 1        # 1 seule partition sur le topic de test -> 1 seul thread utile
+      poll-timeout: 1000    # poll plus court pour accélérer les tests
+      missing-topics-fatal: false

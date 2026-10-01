@@ -108,4 +108,8 @@ public class AllocationItem {
 		this.status = status;
 	}
 
+	public void cancel(){
+        this.status = AllocationItemStatus.CANCELLED;
+	}
+
 }

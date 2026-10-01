@@ -13,12 +13,11 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.Arrays;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
+import java.lang.reflect.InvocationTargetException;
+import java.util.*;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -29,102 +28,183 @@ public class SkuService {
 
     private final SkuRepository skuRepository;
 
+
 	private final JdbcTemplate jdbcTemplate;
 
-
-	public Map<String, List<Sku>> lockAndFetchAvailableStock(List<OrderReceivedEvent> events) {
-		List<String> skuCodes = extractAndSortSkuCodes(events);
-
-		if (skuCodes.isEmpty()) {
-			return Map.of();
-		}
-
-		// recupere tous les sku et block ses ligne de sorte a ce que les autres transaction ne puisse pas acceder
-		// attention cei vas echouer si la donner n'est pas persistente quand on vas redemarer le serveur et les consummer kafka vons
-		// redemarer automatiquement
-		// si on utilise H2 sa vas planter car la donnee ne serra plus memoire  au moment ou les consummer kafka vont rejouer cette methode
-		// Verrouillage pessimiste en BDD
-		List<Sku> allSkus = skuRepository.findAvailableSkusForAllocationWithLock(skuCodes);
-
-		// Regroupement par ProductNr
-		return allSkus.stream()
-			.collect(Collectors.groupingBy(s -> s.getProductNr().getValue()));
-	}
-
-
-
-	private List<String> extractAndSortSkuCodes(List<OrderReceivedEvent> events) {
-		return events.stream()
-			.flatMap(e -> e.getLines().stream())
-			.map(OrderReceivedEvent.OrderLine::getSku)
-			.distinct()
-			.sorted() // Tri alphabétique anti-deadlock
-			.collect(Collectors.toList());
-	}
-
-
-	/**
-	public List<Sku> findAvailableSkus(List<String>skuCodes){
-		List<Sku> skus = skuRepository.findAvailableSkusForAllocationWithLock(skuCodes);
-		 return skus;
-	}
-
-	 **/
-
 	@Transactional // INDISPENSABLE pour garantir le ROLLBACK global en cas de violation d'intégrité
-	public void releaseBulkStock(List<AllocationItem>allocationItems) {
+	public void releaseBulkStock(List<AllocationItem> allocationItems) {
 		if (allocationItems == null || allocationItems.isEmpty()) {
 			return;
 		}
 
 		log.info("[STOCK-SERVICE] Libération de stock en lot pour {} items d'allocation.", allocationItems.size());
 
-		// 1. Conversion directe en Map (SKU -> Quantité à libérer)
-		// Note : toMap plantera si deux items ont le même SKU.
-		// Si des doublons de SKU sont possibles dans ta liste, utilise "Collectors.groupingBy" à la place.
-		Map<UUID, Integer> stockToRelease = allocationItems.stream()
+		Map<UUID, Integer> quantityToReleaseBySkuId = groupQuantityToReleaseBySku(allocationItems);
+		List<Sku> lockedSkus = loadAndLockSkus(quantityToReleaseBySkuId.keySet());
+
+		assertAllSkusFound(quantityToReleaseBySkuId.keySet(), lockedSkus);
+
+		lockedSkus.forEach(sku -> {
+			log.info("[REMAININGBEFORE]- remain={}",sku.getAvailableQuantity());
+			int qtyToRelease = quantityToReleaseBySkuId.get(sku.getId().getValue());
+			sku.releaseRemaningQty(new Quantity(qtyToRelease));
+			log.info("[REMAININGAFETER]- remain={}",sku.getAvailableQuantity());
+		});
+
+		log.info("[STOCK-SERVICE] Stock libéré avec succès pour {} SKUs.", lockedSkus.size());
+	}
+
+	/**
+	 * Regroupe les quantités à libérer par SKU.
+	 * Note : toMap plante si un SKU apparaît plusieurs fois dans allocationItems.
+	 * Si des doublons sont possibles, remplacer par Collectors.groupingBy +
+	 * Collectors.summingInt pour cumuler les quantités au lieu d'écraser.
+	 */
+	private Map<UUID, Integer> groupQuantityToReleaseBySku(List<AllocationItem> allocationItems) {
+		return allocationItems.stream()
+			.filter(item -> item.getSkuId() != null)
 			.collect(Collectors.toMap(
 				AllocationItem::getSkuId,
 				AllocationItem::getQuantity
 			));
+	}
 
-		// 2. Exécution de la mise à jour en lot (Batch SQL)
-		int[][] result = incrementAvailableStockInBatch(stockToRelease);
+	/**
+	 * Charge et verrouille (PESSIMISTIC_WRITE) tous les Sku concernés en une seule requête,
+	 * pour éviter qu'une transaction concurrente ne modifie le stock entre la lecture et l'écriture.
+	 */
 
-		// 3. Vérification de l'intégrité (on "aplatit" le tableau 2D en 1D avec flatMapToInt) le mettre dans une fonction separer
-		boolean hasMissingSku = Arrays.stream(result)
-			.flatMapToInt(Arrays::stream)
-			.anyMatch(count -> count == 0);
+	private List<Sku> loadAndLockSkus(Set<UUID> skuIds) {
+		Set<SkuId> wrappedIds = skuIds.stream()
+			.map(SkuId::new) // oder SkuId.of(...), je nach Konstruktor/Factory deines Value Objects
+			.collect(Collectors.toSet());
 
-		if (hasMissingSku) {
-			log.error("[CRITICAL] Erreur d'intégrité : Impossible de trouver une ligne de stock pour l'un des SKU.");
-			throw new IllegalStateException("La libération du stock en lot a échoué : SKU introuvable en base.");
+		return skuRepository.findAllByIdWithLock(wrappedIds);
+	}
+
+	private void assertAllSkusFound(Set<UUID> requestedSkuIds, List<Sku> foundSkus) {
+		if (foundSkus.size() == requestedSkuIds.size()) {
+			return;
 		}
 
-		log.info("[STOCK-SERVICE] Stock libéré avec succès pour {} SKUs.", stockToRelease.size());
-	}
 
-	private int[][] incrementAvailableStockInBatch(Map<UUID, Integer> stockToRelease) {
-		// Requête simplifiée : on filtre uniquement par SKU désormais
-		String sql = "UPDATE stock SET available_quantity = available_quantity + ? WHERE sku = ?";
+		Set<UUID> foundIds = foundSkus.stream()
+			.map(sku -> sku.getId().getValue()) // ← SkuId → UUID entpacken
+			.collect(Collectors.toSet());
 
-		return jdbcTemplate.batchUpdate(
-			sql,
-			stockToRelease.entrySet(),
-			stockToRelease.size(),
-			(ps, entry) -> {
-				ps.setInt(1, entry.getValue());
-				ps.setString(2, entry.getKey().toString()); // Le SKU (la clé de ta Map)
-			}
-		);
+		Set<UUID> missingIds = new HashSet<>(requestedSkuIds);
+		missingIds.removeAll(foundIds);
+
+		log.error("[CRITICAL] Erreur d'intégrité : SKU introuvable(s) en base : {}", missingIds);
+		throw new IllegalStateException(
+			"La libération du stock en lot a échoué : SKU introuvable(s) en base : " + missingIds);
 	}
 
 
 
-    @Transactional
+
+
+	public Map<String, List<Sku>> lockAndFetchAvailableStock(List<OrderReceivedEvent> events) {
+		//List<String> skuCodes = extractAndSortSkuCodes(events);
+		List<String> skuCodes = OrderReceivedEvent.extractAndSortSkuCodes(events);
+
+		if (skuCodes.isEmpty()) {
+			log.info("skucode vide............................");
+			return Map.of();
+		}
+
+
+		// Verrouillage pessimiste en BDD
+		List<Sku> allSkus = skuRepository.findAvailableSkusForAllocationWithLock(skuCodes);
+        log.info("[Sku size]- skusize={}",allSkus.size());
+		// Regroupement par ProductNr
+		return allSkus.stream()
+			.collect(Collectors.groupingBy(s -> s.getProductNr().getValue()));
+	}
+
+  public Map<String, List<Sku>> fetchAvailableStock(OrderReceivedEvent event){
+	  //List<String> skuCodes = extractAndSortSkuCodes(events);
+	  List<String> skuCodes = OrderReceivedEvent.extractAndSortSkuCodes(event);
+
+	  if (skuCodes.isEmpty()) {
+		  return Map.of();
+	  }
+
+	  List<Sku> allSkus = skuRepository.findAvailableSkusForAllocationWithLock(skuCodes);
+
+	  // Regroupement par ProductNr
+	  return allSkus.stream()
+		  .collect(Collectors.groupingBy(s -> s.getProductNr().getValue()));
+
+  }
+
+	/*
+
+	  public List<Sku> findAvailableSkusForAllocationWithLock(List<String>products){
+		  return skuRepository.findAvailableSkusForAllocationWithLock(products);
+	  }
+	  @Transactional // INDISPENSABLE pour garantir le ROLLBACK global en cas de violation d'intégrité
+	  public void releaseBulkStock(List<AllocationItem>allocationItems)  {
+		  if (allocationItems == null || allocationItems.isEmpty()) {
+			  return;
+		  }
+
+		  log.info("[STOCK-SERVICE] Libération de stock en lot pour {} items d'allocation.", allocationItems.size());
+
+		  // 1. Conversion directe en Map (SKU -> Quantité à libérer)
+		  // Note : toMap plantera si deux items ont le même SKU.
+		  // Si des doublons de SKU sont possibles dans ta liste, utilise "Collectors.groupingBy" à la place.
+		  Map<UUID, Integer> stockToRelease = allocationItems.stream()
+			  .filter(item -> item.getSkuId() != null)
+			  .collect(Collectors.toMap(
+				  AllocationItem::getSkuId,
+				  AllocationItem::getQuantity
+			  ));
+
+		  // 2. Exécution de la mise à jour en lot (Batch SQL)
+		  // voici la ligne qui cause probleme
+		  int[][] result = incrementAvailableStockInBatch(stockToRelease);
+
+		  // 3. Vérification de l'intégrité (on "aplatit" le tableau 2D en 1D avec flatMapToInt) le mettre dans une fonction separer
+		  boolean hasMissingSku = Arrays.stream(result)
+			  .flatMapToInt(Arrays::stream)
+			  .anyMatch(count -> count == 0);
+
+		  if (hasMissingSku) {
+			  log.error("[CRITICAL] Erreur d'intégrité : Impossible de trouver une ligne de stock pour l'un des SKU.");
+			  throw new IllegalStateException("La libération du stock en lot a échoué : SKU introuvable en base.");
+		  }
+
+
+		  log.info("[STOCK-SERVICE] Stock libéré avec succès pour {} SKUs.", stockToRelease.size());
+	  }
+
+	  private int[][] incrementAvailableStockInBatch(Map<UUID, Integer> stockToRelease) {
+		  // Requête simplifiée : on filtre uniquement par SKU désormais
+		  //Incohérence du Cache Hibernate : JdbcTemplate contourne le cache L1 d'Hibernate et modifie directement la table skus.
+		  String sql = "UPDATE skus SET available_qty = available_qty + ? WHERE id = ?";
+
+		  return jdbcTemplate.batchUpdate(
+			  sql,
+			  stockToRelease.entrySet(),
+			  stockToRelease.size(),
+			  (ps, entry) -> {
+				  ps.setInt(1, entry.getValue());
+				  // 2. Transmettre l'UUID correctement à JDBC (mieux que toString() pour Postgres/H2)
+				  ps.setObject(2, entry.getKey());
+				  //ps.setString(2, entry.getKey().toString()); // Le SKU (la clé de ta Map)
+			  }
+		  );
+	  }
+	  */
+	@Transactional
+	public void saveSkus(List<Sku>skus){
+		skuRepository.saveAll(skus);
+	}
+
+	@Transactional
     public SkuResponse createSku(CreateSkuRequest request) {
-        // Un même produit peut exister dans plusieurs emplacements.
-        // Ce qui est interdit : le même produit dans le MÊME emplacement.
+
         if (skuRepository.existsByProductNrAndLocationCode(request.productNr(), request.locationCode())) {
             throw new DuplicateSkuException(
                     "SKU already exists for productNr=" + request.productNr()
@@ -134,10 +214,6 @@ public class SkuService {
         Sku sku = Sku.create(new ProductNr(request.productNr()),
                 new Quantity(request.totalQuantity()), request.locationCode());
         sku = skuRepository.save(sku);
-
-        log.info("[SKU] Created skuId={} productNr={} location={} qty={}",
-                sku.getId(), sku.getProductNr().getValue(),
-                sku.getLocation().getCode(), sku.getTotalQuantity().getValue());
 
         return toResponse(sku);
     }
@@ -162,25 +238,16 @@ public class SkuService {
         return skus.stream().map(this::toResponse).toList();
     }
 
-    @Transactional
-    public void reserve(SkuId skuId, Quantity qty) {
-        Sku sku = skuRepository.findByIdForUpdate(skuId)
-                .orElseThrow(() -> new SkuNotFoundException("SKU not found: " + skuId));
-        sku.reserve(qty);
-        log.info("[SKU] Reserved qty={} skuId={} available={}",
-                qty.getValue(), skuId, sku.getAvailableQuantity().getValue());
-    }
 
 	// reaprovisionement du stock des quantity liberera
     @Transactional
     public void release(SkuId skuId, Quantity qty) {
         Sku sku = skuRepository.findByIdForUpdate(skuId)
                 .orElseThrow(() -> new SkuNotFoundException("SKU not found: " + skuId));
-        sku.release(qty); // actualisation du stock
+        sku.releaseRemaningQty(qty); // actualisation du stock
         log.info("[SKU] Released qty={} skuId={} available={}",
                 qty.getValue(), skuId, sku.getAvailableQuantity().getValue());
-        // Note : le retry est notifié via StockReleasedEvent → handleStockReleased()
-        // pour éviter un double-déclenchement (release() + handleStockReleased())
+
     }
 
     /**

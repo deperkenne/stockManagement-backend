@@ -2,6 +2,7 @@ package com.stock.management.order;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.stock.management.allocation.AllocationReleasedEvent;
 import com.stock.management.allocation.AllocationRetryService;
 import com.stock.management.allocationLine.AllocationItem;
 import com.stock.management.allocationLine.AllocationItemService;
@@ -12,6 +13,8 @@ import com.stock.management.order.domain.*;
 import com.stock.management.order.dto.*;
 import com.stock.management.order.internal.OrderValidator;
 import com.stock.management.sku.SkuService;
+import com.stock.management.sku.domain.Sku;
+import com.stock.management.sku.dto.SkuResponse;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.EntityNotFoundException;
 import jakarta.persistence.LockModeType;
@@ -24,13 +27,14 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.lang.reflect.InvocationTargetException;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.stream.Collectors;
 
-import static com.stock.management.order.domain.OrderStatus.CANCELLED;
-import static com.stock.management.order.domain.OrderStatus.PARTIALLY_ALLOCATED;
+import static com.stock.management.order.domain.OrderStatus.*;
 
 
 /**
@@ -48,15 +52,15 @@ public class OrderService {
     private final OrderRepository orderRepository;
 	private final OrderStatusHistoryRepository orderStatusHistoryRepository;
 	private final SkuService skuService;
-	private final AllocationRetryService allocationRetryService;
     private final OrderValidator orderValidator;
 	private final ApplicationEventPublisher eventPublisher;
 	private final KafkaEventPublisher kafkaEventPublisher;
 	private final ObjectMapper objectMapper;
 	private final OrderOutboxRepository outboxRepository;
-	// ◄── Spring injecte automatiquement l'EntityManager ici
 	@PersistenceContext
-	private final EntityManager entityManager;// ◄── Spring injecte automatiquement l'EntityManager ici
+	private final EntityManager entityManager; // tres important quand il vas nous aidez a persister
+	                                           // les donnee vers la db sans attendre le commit de Hibernate
+
 
     @Transactional
     public boolean orderChangeStatus(List<OrderId> orderIds, OrderStatus newStatus) {
@@ -75,7 +79,7 @@ public class OrderService {
 	@Transactional
 	public CreateOrderResponse receiveOrder(CreateOrderRequest request) {
 		// 1. Validation de la requête
-		orderValidator.validate(request);
+		orderValidator.validateNoDuplicateProductNr(request);
 
 		// 2. Création et persistance (Order + Historique initial)
 		CustomerOrder order = createAndPersistOrder(request);
@@ -92,13 +96,18 @@ public class OrderService {
 		return CustomerOrder.createIdFrom(rawUuid);
 	}
 
+	@Transactional
 	public void changeLineStatus(OrderId orderId,Map<UUID,LineItemStatus> linesToUpdateByStatus){
 		// Hibernate NE FAIT PAS de requête SQL 'SELECT' ici !
 		// Il retrouve l'objet directement en mémoire dans son Persistence Context (1st Level Cache)
+		// probleme de security
 		CustomerOrder order = getOrder(orderId);
+
 		order.updateLineItemStatus(linesToUpdateByStatus);
+
 	}
 
+	@Transactional
 	public void changeOrderStatus(OrderId orderId, OrderStatus orderStatus){
 		CustomerOrder order = getOrder(orderId);
 		order.updateOrderStatus(orderStatus);
@@ -130,30 +139,6 @@ public class OrderService {
         return toOrderResponse(order, true);
     }
 
-    // ─── Mise à jour (CRUD) ───────────────────────────────────────────────────────
-
-    /** PUT /api/orders/{orderId} — modifie priority / completeDeliveryRequired / currency uniquement. */
-    @Transactional
-    public CreateOrderResponse updateOrder(UUID orderId, UpdateOrderRequest request) {
-        CustomerOrder order = orderRepository.findById(new OrderId(orderId))
-                .orElseThrow(() -> new OrderNotFoundException("Order not found: " + orderId));
-        order.updateDetails(request.priority(), request.completeDeliveryRequired(), request.currency());
-        log.info("[ORDER] Updated orderId={} priority={} currency={}", orderId, request.priority(), request.currency());
-        return toOrderResponse(order, false);
-    }
-
-    // ─── Suppression (CRUD) ───────────────────────────────────────────────────────
-
-    /** DELETE /api/orders/{orderId} — supprime la commande. cascade=ALL + orphanRemoval=true supprime aussi ses lignes. */
-    @Transactional
-    public void deleteOrder(UUID orderId) {
-        CustomerOrder order = orderRepository.findById(new OrderId(orderId))
-                .orElseThrow(() -> new OrderNotFoundException("Order not found: " + orderId));
-        orderRepository.delete(order);
-        log.info("[ORDER] Deleted orderId={}", orderId);
-    }
-
-    // ─── Lignes de commande — CRUD sur la sous-ressource /lines ──────────────────
 
     /** POST /api/orders/{orderId}/lines — ajoute une ligne à une commande existante. */
     @Transactional
@@ -165,25 +150,6 @@ public class OrderService {
         return toOrderResponse(order, true);
     }
 
-    /** PUT /api/orders/{orderId}/lines/{lineItemId} — modifie quantité/prix d'une ligne existante. */
-    @Transactional
-    public CreateOrderResponse updateLineItem(UUID orderId, UUID lineItemId, LineItemRequest request) {
-        CustomerOrder order = orderRepository.findByIdWithLineItems(new OrderId(orderId))
-                .orElseThrow(() -> new OrderNotFoundException("Order not found: " + orderId));
-        order.updateLineItem(new LineItemId(lineItemId), new Quantity(request.requestedQty()), request.unitPrice());
-        log.info("[ORDER] Updated lineItemId={} on orderId={}", lineItemId, orderId);
-        return toOrderResponse(order, true);
-    }
-
-    /** DELETE /api/orders/{orderId}/lines/{lineItemId} — retire une seule ligne (orphanRemoval déclenche le DELETE SQL). */
-    @Transactional
-    public CreateOrderResponse removeLineItem(UUID orderId, UUID lineItemId) {
-        CustomerOrder order = orderRepository.findByIdWithLineItems(new OrderId(orderId))
-                .orElseThrow(() -> new OrderNotFoundException("Order not found: " + orderId));
-        order.removeLineItem(new LineItemId(lineItemId));
-        log.info("[ORDER] Removed lineItemId={} from orderId={}", lineItemId, orderId);
-        return toOrderResponse(order, true);
-    }
 
     // ─── Mapping entité → DTO — TOUJOURS fait à l'intérieur de la transaction ────
     // (open-in-view=false : mapper après le retour de la méthode ferait planter tout accès
@@ -220,29 +186,46 @@ public class OrderService {
 	 */
 	@Transactional
 	public CancelOrderResponse cancelOrder(OrderId orderId, CancelOrderRequest request) {
+		log.info("[CANCELORDER]-START");
+
+		// 1. Validation Fail-Fast (Évite les requêtes BDD inutiles)
+		if (orderId == null || orderId.getValue() == null) {
+			throw new IllegalArgumentException("OrderId cannot be null or empty.");
+		}
+
+		List<AllocationItem> allocationItems = new ArrayList<>();
+
+		//  2. Validation du DTO Request
+		if (request == null || request.cancellationSource() == null) {
+			throw new IllegalArgumentException("CancelOrderRequest and cancellationSource are required.");
+		}
+
 		CustomerOrder order = orderRepository.findByIdWithLineItemsForUpdate(orderId)
 			.orElseThrow(() -> new EntityNotFoundException("Order not found: " + orderId));
 
-		// 2. Verrouillage PESSIMISTE propre via l'EntityManager (uniquement sur la racine)
-		entityManager.lock(order, LockModeType.PESSIMISTIC_WRITE);
-
+        order.validateCancellationEligibility();
 		OrderStatus oldStatus = order.getStatus();
 
-		// verify si l'annulation doit avoir lieu ou pas
-		validateCancellationEligibility(oldStatus,UUID.fromString(order.getId().getValue().toString()));
-
-		if (oldStatus == OrderStatus.PARTIALLY_ALLOCATED) {
-			log.info("[CANCEL] Order {} is PARTIAL. Initiating stock release...", order.getId());
-			releaseStockForPartialOrder(order);
-		}
 
 
+        // passer le orderservice au  lieu de l'object directe
+		// on arrive a cancel parceque la commande n'avais pas subis d'allocation donc on cancell la commande et les ligne sans rejouer ou replay
 		order.cancel(request.cancellationSource(),request.reason(),request.cancelledBy()); // call cancel function to change all orderLineItemStatus to Cancelled also orderStatus to Cancelled
-		orderRepository.save(order);
+		log.info("[ORDER-CANCELaTION]-SUCCESS");
 		orderStatusHistoryRepository.save(OrderStatusHistory.of(
 				orderId.getValue(), oldStatus, CANCELLED, "CANCEL:" + request.cancellationSource().name()));
 
 		log.info("[CANCEL] Order {} successfully transitioned from {} to CANCELLED.", orderId, oldStatus);
+
+		// verify si l'annulation doit avoir lieu ou pas
+		//validateCancellationEligibility(oldStatus,UUID.fromString(order.getId().getValue().toString()));
+		// reply order n'a lieu que si le status de l'ordere est ParTial dans le cas contraire avec d'autre status NOT-ALLOCATE on
+		// change juste le statsus de la commande car aucune allocation n'avais eu lieu
+		if (oldStatus == OrderStatus.PARTIALLY_ALLOCATED) {
+			log.info("[CANCEL] Order {} is PARTIAL. Initiating stock release...", order.getId());
+			allocationItems = releaseStockForPartialOrder(order);
+			releaseStockAndRetryPending(order, allocationItems);
+		}
 		return new CancelOrderResponse(
 			orderId.toString(),
 			CANCELLED.name(),
@@ -261,14 +244,17 @@ public class OrderService {
 		CustomerOrder order = orderRepository.findByIdWithLineItemsForUpdate(new OrderId(orderId))
 			.orElseThrow(() -> new OrderNotFoundException("Order not found: " + orderId));
 
+		order.validateOrderStateForCancellation();
+
 		OrderStatus oldStatus = order.getStatus();
 
 		// 2. Guard Clauses globales
-		validateOrderStateForCancellation(orderId, oldStatus);
+		//validateOrderStateForCancellation(orderId, oldStatus);
 
 
 		// LE MÉTIER EST ENTIÈREMENT DÉLÉGUÉ À L'ENTITÉ ICI :
 		List<LineItemId> targets = order.extractEligibleLineIdsForCancellation(request.lineItemIds());
+
 		if (targets.isEmpty()) {
 			log.info("[CANCEL] All requested lines are already cancelled for orderId={}", orderId);
 			return new CancelOrderResponse(orderId.toString(), order.getStatus().name(), 0, request.cancellationSource().name(), order.getCancelledAt());
@@ -279,17 +265,24 @@ public class OrderService {
 
 		// Récupération et Soft-Delete des allocations associées pour éviter définitivement le rejeu
 		List<UUID> targetUuids = targets.stream().map(LineItemId::getValue).toList();
-		List<AllocationItem> allocationsToRelease = findAllAllocationItem(targetUuids);
+
+		List<AllocationItem> allocationsToRelease = allocationItemService.findAllByLineItemIdInAndSkuIdNotNull(targetUuids);
+
+        // 2. Mutation explicite sur le domaine Java
+		// passer le status des allocationItem concerner a False
+		allocationsToRelease.forEach(AllocationItem::cancel);
 
 
+		/*
 		if (!allocationsToRelease.isEmpty()) {
 			// change allocationItemStatus  to cancel of specific allocationItem
 			allocationItemService.updateStatusToCancelledByOrderId(order.getId().getValue());
 		}
+        */
 
 		// 6. Recalcul et ajustement du statut global de la commande  si le status est partial
 		order.evaluateAndModifyGlobalStatus();
-		orderRepository.save(order);
+
 		logStatusChangeIfAny(orderId, oldStatus, order.getStatus(), "PARTIAL_CANCEL");
 
 		if (oldStatus == PARTIALLY_ALLOCATED) {
@@ -302,8 +295,9 @@ public class OrderService {
 	@Transactional
 	public void handleCompleteDeliveryFailure(OrderId orderId) {
 		// 1. On récupère UNIQUEMENT le statut actuel via une projection (SELECT très rapide sur index)
-
-		log.error("[FIND order] Order {} for this id ", orderId);
+        // **a revoire il serais preferable de charger l'object CustomerOrder et ses lignes pas le status
+		// pour la performance  car une fois l'object charger Hibernate vas se charger de faire le reste
+		log.info("[FIND order] Order {} for this id ", orderId);
 		Optional<OrderStatus> currentStatusOpt = orderRepository.findStatusById(orderId);
 
 		// Cas A : La commande n'existe pas -> On traite l'anomalie
@@ -320,8 +314,10 @@ public class OrderService {
 			return;
 		}
 
-		// Cas C : La commande existe et doit être mise à jour
+		// Cas C : La commande existe  son status et celui de ses lignes doivent etre mise a jours
+		// a revoire nous devoons laisser hibernate manager
 		orderRepository.updateOrderStatus(orderId, OrderStatus.ALLOCATION_FAILED);
+		// meme updateAllLinesStatus dois etre gerer par Hibernete
 		int updatedLines = orderRepository.updateAllLinesStatusIfChanged(orderId, LineItemStatus.NOT_ALLOCATED);
 		orderStatusHistoryRepository.save(
 				OrderStatusHistory.of(orderId.getValue(), currentStatus, OrderStatus.ALLOCATION_FAILED, "ALLOCATION_FAILED"));
@@ -366,31 +362,57 @@ public class OrderService {
 	}
 
 	// changement de status des allocationitems  a cancelled pour eviter de les rejouer
-	private void releaseStockForPartialOrder(CustomerOrder order) {
+	private  List<AllocationItem> releaseStockForPartialOrder(CustomerOrder order) {
+		log.info("[CANCEL] Starting stock relea" +
+			"se process for partial orderId={}", order.getId().getValue());
 		// Extraction des IDs de toutes les lignes de la commande
 		// 🔍 Récupération directe des UUIDs de toutes les lignes de la commande
-		List<UUID> lineItemUuids = order.getLineItems().stream()
-			.map(LineItem::getId)
-			.map(LineItemId::getValue)
-			.toList();
+		List<UUID> lineItemUuids = order.extractLineItemUuids();
 
-		// stock dans le cahe de hibernette   donc toute les modification se ferront maintenenat dans le cache plus rapide
-		// allocationItem to reallocate to SKU (stock)
-		List<AllocationItem> activeAllocations = findAllAllocationItem(lineItemUuids);
+		log.debug("\u001B[34m[CANCEL] Extracted {} line item IDs for orderId={}: {}\u001B[0m", lineItemUuids.size(), order.getId(), lineItemUuids);
+
+		// list of allocationItem to reallocate to SKU (stock)
+		//List<AllocationItem> activeAllocations =  allocationItemService.findAllByLineItemIdInAndSkuIdNotNull(lineItemUuids);
+		List<AllocationItem> activeAllocations =  allocationItemService.findAllByLineItemIdIn(lineItemUuids);
 
 		if (activeAllocations.isEmpty()) {
 			log.info("[CANCEL] No active stock allocations found for partial order {}.", order.getId());
-			return;
+			return null;
+		}
+		log.info("[CANCEL] Found {} active allocation(s) to release for orderId={}", activeAllocations.size(), order.getId());
+
+		// 3. Annulation explicite du statut des AllocationItems (Mutation du domaine)
+		//Il faut TOUJOURS faire muter l'état via l'objet du Domaine (AllocationItem::cancel), et NON PAS en passant
+		// par une méthode de Service qui exécuterait une mise à jour SQL directe
+		activeAllocations.forEach(AllocationItem::cancel);
+
+		// reallocation du stock  c'est a dire on remet les quantite qui avaient ete allouer dans allocationItem table dans la table sku
+		//releaseStockAndRetryPending(order, activeAllocations); // qty to reallocate to the specific SKUs
+
+		log.debug("[CANCEL] Releasing stock quantities and retrying pending orders for orderId={}...", order.getId());
+		// change allocationItemStatus  to cancel of specific allocationItem
+		//allocationItemService.updateStatusToCancelledByOrderId(order.getId().getValue());
+		log.info("[CANCEL] Successfully reallocated stock for orderId={}", order.getId());
+
+		return activeAllocations;
+
+	}
+
+
+	private  List<AllocationItem> filterActiveWithSku(List<AllocationItem> allocations) {
+		if (allocations == null || allocations.isEmpty()) {
+			return Collections.emptyList();
 		}
 
-		// reallocation du stock  c'est dire on remet les quantite qui avaient ete allouer dans allocationItem
-		// dans la table sku
-		releaseStockAndRetryPending(order, activeAllocations); // qty to reallocate to the specific SKUs
+		List<AllocationItem> activeAllocations = new ArrayList<>(allocations.size());
 
-		// change allocationItemStatus  to cancel of specific allocationItem
-		allocationItemService.updateStatusToCancelledByOrderId(order.getId().getValue());
+		for (AllocationItem item : allocations) {
+			if (item.getSkuId() != null) { // Utilisation d'une méthode d'intention du domaine
+				activeAllocations.add(item);
+			}
+		}
 
-
+		return activeAllocations;
 	}
 
 
@@ -429,20 +451,6 @@ public class OrderService {
 		  return lines;
 	}
 
-	/*
-	private void publishOrderReceivedEvent(CustomerOrder order) {
-
-		BigDecimal total = order.getLineItems().stream()
-			.map(li -> li.getUnitPrice().multiply(BigDecimal.valueOf(li.getRequestedQty().getValue())))
-			.reduce(BigDecimal.ZERO, BigDecimal::add);
-
-		kafkaEventPublisher.publishOrderReceived(order);
-
-		log.debug("[ORDER] Published order.received for orderId={}", order.getId());
-	}
-
-	 */
-
 
 
 	private CustomerOrder createAndPersistOrder(CreateOrderRequest request) {
@@ -478,7 +486,7 @@ public class OrderService {
 				.createdAt(LocalDateTime.now())
 				.build();
 
-			outboxRepository.save(outboxEntry);
+			outboxRepository.save(outboxEntry); // le test vas verifier s'il est appeler avec les parameter
 
 		} catch (JsonProcessingException e) {
 			throw new IllegalStateException("Erreur de sérialisation de l'événement Outbox", e);
@@ -557,21 +565,28 @@ public class OrderService {
 	private void releaseStockAndRetryPending(CustomerOrder order, List<AllocationItem> allocationItems) {
 
 		// 2. Traitement du Retry dans une bulle isolée
-		try {
-			// muss call a rollback when something wrong append
-			skuService.releaseBulkStock(allocationItems);
+			log.debug("\u001B[34m[RELEASE-STOCK] Executing bulk stock release via skuService for orderId={}\u001B[0m", allocationItems.size());
 
+			// muss call a rollback when something wrong append
+			// reallocation de qty desallouer
+			skuService.releaseBulkStock(allocationItems);
+			log.info("\u001B[34m[RELEASE-STOCK][RELEASE-STOCK] Bulk stock released successfully for orderId={}\u001B[0m", allocationItems.size());
 			// On appelle le service externe qui possède sa propre transaction isolée
-			allocationRetryService.retryPendingOrders(allocationItems);
+			// cette methode cause probleme  ici le probleme est causer
+			//allocationRetryService.retryPendingOrders(allocationItems);
+
+			log.debug("\u001B[34m[RELEASE-STOCK][RELEASE-STOCK] Publishing allocation items event for retry mechanism (orderId={}\u001B[0m)...", allocationItems.size());
+
+		try {
+			// transaction principal
+			eventPublisher.publishEvent(new AllocationReleasedEvent(allocationItems));
+			log.info("\u001B[34m[RELEASE-STOCK] Retry event published successfully for orderId={}\u001B[0m", allocationItems.size());
 		} catch (Exception e) {
-			// TRÈS IMPORTANT : On attrape l'exception ici.
-			// Comme l'exception est gérée (catchée), elle ne remonte pas à la transaction principale.
-			// Donc, skuService ne subira PAS de rollback même si le retry échoue.
-			log.error("Le retry a échoué, mais la libération de stock est validée et conservée : {}", e.getMessage());
+			log.warn("Échec de retryPendingOrders, transaction B a rollback seule — la transaction A continue normalement", e);
+			// on avale l'exception ici : elle ne remonte PAS au proxy de A
 		}
 
 	}
-
 
 
 	private OrderReceivedEvent.OrderLine toOrderLine(LineItem li) {
@@ -582,6 +597,8 @@ public class OrderService {
 				? li.getCustomerOrder().getId().toString()
 				: null)
 			.sku(li.getProductNr() != null ? li.getProductNr().getValue() : null)
+			// Si ton DTO possède un champ status et que l'entité LineItem a un statut :
+			.status(li.getStatus() != null ? li.getStatus() : null)
 			.quantity(li.getRequestedQty() != null ? li.getRequestedQty().getValue() : 0)
 			.unitPrice(li.getUnitPrice())
 			.build();
@@ -597,4 +614,8 @@ public class OrderService {
 			.build();
 
 	}
+
+
+
+
 }

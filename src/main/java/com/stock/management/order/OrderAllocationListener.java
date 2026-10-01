@@ -27,6 +27,7 @@ public class OrderAllocationListener {
 	public void handleOrderCreated(List<OrderReceivedEvent> orderReceivedEvents) {
 
 		try {
+			log.info("\u001B[34m[CALL-ALLOCATION-SERVICE]  {}  start retry process\u001B[0m",orderReceivedEvents.size());
 			allocationService.allocate(orderReceivedEvents);
 		} catch (Exception ex) {
 			// On extrait proprement la liste des IDs pour le log

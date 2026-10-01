@@ -7,6 +7,7 @@ import com.stock.management.kafka.producer.KafkaEventPublisher;
 import com.stock.management.order.domain.CustomerOrder;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Profile;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.kafka.support.KafkaHeaders;
@@ -22,10 +23,12 @@ import static com.stock.management.kafka.config.KafkaTopics.DLT_TOPIC;
 @Slf4j
 @Component
 @RequiredArgsConstructor
+@Profile("!test")
 public class OrderEventConsumer {
 
     private final KafkaEventHandler eventHandler;
 	private final KafkaEventPublisher kafkaEventPublisher;
+
 
 
 
@@ -46,6 +49,11 @@ public class OrderEventConsumer {
             @Header(KafkaHeaders.OFFSET) List<Long> offsets,
             Acknowledgment ack) {
 
+		//  Top départ
+		long startTime = System.currentTimeMillis();
+		boolean batchSuccess = false;
+
+
 		log.info("[KAFKA] Received batch of {} orders — first: topic={} partition={} offset={}",
 			orderReceivedEvents.size(), topics.get(0), partitions.get(0), offsets.get(0));
 		try {
@@ -53,7 +61,7 @@ public class OrderEventConsumer {
 			eventHandler.handleOrderReceivedBatch(orderReceivedEvents);
 
 		} catch (Exception ex) {
-			log.warn("[KAFKA] Échec du batch (taille={}). Début du fallback unitaire avec retries. Cause: {}",
+			log.error("[KAFKA] Échec du batch (taille={}). Début du fallback unitaire avec retries. Cause: {}",
 				orderReceivedEvents.size(), ex.getMessage());
 
 			// DANS VOTRE LISTENER (REPLI BATCH) ──────────────────────────────────────
@@ -70,8 +78,17 @@ public class OrderEventConsumer {
 				}
 			}
 			//  Validation explicite de l'offset une fois TOUT le batch traité (hors de la boucle)
-			ack.acknowledge();
+
 		}
+
+		ack.acknowledge();
+		//  Calcul de la durée totale
+		long executionTime = System.currentTimeMillis() - startTime;
+
+		log.info("[KAFKA PERFORMANCE] Batch de {} messages traité en {} ms (Mode: {})",
+			orderReceivedEvents.size(),
+			executionTime,
+			batchSuccess ? "BATCH_FAST" : "SINGLE_FALLBACK");
 	}
 
 
@@ -87,6 +104,7 @@ public class OrderEventConsumer {
 		}
 	}
 
+	/*
 	@KafkaListener(topics = "order.received-dlt", groupId = "order-dlt-group")
 	public void processDltMessages( @Payload List<OrderReceivedEvent> orderReceivedEvents, Acknowledgment ack) {
 		try {
@@ -99,6 +117,8 @@ public class OrderEventConsumer {
 			ack.acknowledge();
 		}
 	}
+
+	 */
 
 }
 

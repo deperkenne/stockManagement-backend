@@ -1,6 +1,7 @@
 package com.stock.management.order.domain;
 
 import com.stock.management.kafka.event.OrderReceivedEvent;
+import com.stock.management.order.InvalidOrderStateException;
 import jakarta.persistence.*;
 import lombok.AccessLevel;
 import lombok.Getter;
@@ -59,6 +60,32 @@ public class LineItem {
 
 	@Column(name = "received_at", nullable = false, updatable = false)
 	private Instant receivedAt;
+
+
+	/**
+	 * Constructeur complet package-private : idéal pour instancier des états
+	 * spécifiques dans les tests unitaires sans passer par JPA ou la réflexion.
+	 */
+	public LineItem(LineItemId id,
+			 CustomerOrder customerOrder,
+			 ProductNr productNr,
+			 Quantity requestedQty,
+			 Quantity allocatedQty,
+			 BigDecimal unitPrice,
+			 LineItemStatus status) {
+
+		Instant now = Instant.now();
+
+		this.id = Objects.requireNonNull(id, "LineItemId cannot be null");
+		this.customerOrder = customerOrder; // Peut être null temporairement si construit avant la commande
+		this.productNr = Objects.requireNonNull(productNr, "ProductNr cannot be null");
+		this.requestedQty = Objects.requireNonNull(requestedQty, "RequestedQty cannot be null");
+		this.allocatedQty = allocatedQty != null ? allocatedQty : Quantity.zero();
+		this.unitPrice = Objects.requireNonNull(unitPrice, "UnitPrice cannot be null");
+		this.status = status != null ? status : LineItemStatus.PENDING;
+		this.receivedAt = now;
+		this.updatedAt = now;
+	}
 
 	/**
 	 * Automatisation Hibernate : juste avant le INSERT SQL,

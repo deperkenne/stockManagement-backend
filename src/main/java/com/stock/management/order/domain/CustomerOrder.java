@@ -1,8 +1,10 @@
 package com.stock.management.order.domain;
 
 import com.stock.management.kafka.event.OrderReceivedEvent;
+import com.stock.management.order.InvalidOrderStateException;
 import com.stock.management.order.LineItemNotFoundException;
 import com.stock.management.order.OrderCancellationException;
+import com.stock.management.order.OrderStateConflictException;
 import com.stock.management.order.dto.CreateOrderRequest;
 import com.stock.management.order.dto.LineItemRequest;
 import jakarta.persistence.*;
@@ -15,8 +17,11 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import static com.stock.management.order.domain.LineItemStatus.NOT_ALLOCATED;
+import static com.stock.management.order.domain.OrderStatus.CANCELLED;
 
 /**
  * ordercancelation consomme via une requette API POst duclient
@@ -31,6 +36,7 @@ import static com.stock.management.order.domain.LineItemStatus.NOT_ALLOCATED;
 })
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
+
 public class CustomerOrder {
 
     @EmbeddedId
@@ -79,9 +85,12 @@ public class CustomerOrder {
     @Column(name = "cancelled_at")
     private Instant cancelledAt;
 
+	/* optimisch lock pour proteger chaque commande d'une modification concurrente
     @Version
     @Column(name = "version", nullable = false)
     private long version;
+
+	 */
 
     @OneToMany(mappedBy = "customerOrder", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<LineItem> lineItems = new ArrayList<>();
@@ -106,7 +115,19 @@ public class CustomerOrder {
 		this.updatedAt = Instant.now().truncatedTo(ChronoUnit.MILLIS);
 	}
 
+    // ceci vas permettre au attaquant d'utiliser la fausse list ou la copie au lieu de la vrai
+	public List<LineItem> getLineItems() {
+		// Crée une vraie copie défensive ET immuable (Java 10+)
+		return List.copyOf(this.lineItems);
+	}
 
+	// 2. Constructeur métier / package-private pour les tests et la création
+	public  CustomerOrder(OrderId id, OrderStatus status, Priority priority, List<LineItem> lineItems) {
+		this.id = Objects.requireNonNull(id, "Order ID cannot be null");
+		this.status = (status != null) ? status : OrderStatus.PENDING;
+		this.priority = (priority != null) ? priority : Priority.NORMAL;
+		this.lineItems = lineItems != null ? new ArrayList<>(lineItems) : new ArrayList<>();
+	}
 	// =========================================================================
 	// FACTORY METHOD OPTIMISÉE (Encapsule la création et protège le domaine)
 	// =========================================================================
@@ -154,21 +175,34 @@ public class CustomerOrder {
 
 	/**
 	 * Modifie le statut des lignes spécifiées vers CANCELLED.
-	 * Cette méthode fait confiance à la liste filtrée en amont.
 	 *
-	 * @param targetsToCancel Liste des IDs des lignes à annuler.
+	 * @param targetsToCancel Liste des identifiants des lignes à annuler.
+	 * @throws IllegalArgumentException si targetsToCancel est null.
 	 */
 	public void cancelLines(List<LineItemId> targetsToCancel) {
 		if (targetsToCancel == null || targetsToCancel.isEmpty()) {
-			return;
+			throw new IllegalArgumentException("Target line items to cancel cannot be null or empty.");
 		}
 
-		// Transformation en Set pour optimiser la recherche (.contains en O(1) au lieu de O(N))
-		Set<LineItemId> targetSet = new HashSet<>(targetsToCancel);
+		// 2. Utilisation de Set.copyOf (Immuable, supprime les doublons, O(1) lookup)
+		Set<LineItemId> targetSet = Set.copyOf(targetsToCancel);
+		int cancelledCount = 0;
+		// 2. Parcours impératif (pas de surcharge Stream)
+		for (LineItem line : this.lineItems) {
+			if (targetSet.contains(line.getId())) {
+				line.cancel();
+				cancelledCount++;
+			}
+		}
 
-		this.lineItems.stream()
-			.filter(line -> targetSet.contains(line.getId()))
-			.forEach(LineItem::cancel); // Délégation de la mutation à l'objet de transition (OrderLine)
+		// 4. Vérification d'intégrité : Tous les IDs demandés existaient-ils dans la commande ?
+		if (cancelledCount != targetSet.size()) {
+			throw new LineItemNotFoundException(
+				String.format("Cancellation failed: Some line items do not belong to order %s", this.id.getValue())
+			);
+		}
+
+
 	}
 
 
@@ -177,37 +211,72 @@ public class CustomerOrder {
 	 * Re-calcule de manière chirurgicale le statut global de la commande
 	 * en fonction de l'état actuel de TOUTES ses lignes.
 	 */
+
 	public void evaluateAndModifyGlobalStatus() {
-		// 1. Compte le nombre de lignes par statut
-		long totalLines = this.lineItems.size();
-
-		long cancelledLines = this.lineItems.stream()
-			.filter(line -> line.getStatus() == LineItemStatus.CANCELLED)
-			.count();
-
-		long fullyAllocatedLines = this.lineItems.stream()
-			.filter(line -> line.getStatus() == LineItemStatus.FULLY_ALLOCATED)
-			.count();
-
-		// 2. Machine à états (State Machine) comportementale
-		if (cancelledLines == totalLines) {
-			this.status = OrderStatus.CANCELLED; // Toutes les lignes sont annulées
-		} else if (fullyAllocatedLines + cancelledLines == totalLines) {
-			this.status = OrderStatus.FULLY_ALLOCATED; // Le reste est 100% alloué
-		} else if (cancelledLines > 0) {
-			this.status = OrderStatus.PARTIALLY_ALLOCATED; // Mutation naturelle suite à l'annulation partielle
+		if (this.lineItems == null || this.lineItems.isEmpty()) {
+			throw new IllegalArgumentException("order muss habe least one lineitem");
 		}
-		// Tu peux rajouter tes autres règles ici sans impacter tes services
+
+		int total = this.lineItems.size();
+		int cancelled = 0;
+		int fullyAllocated = 0;
+		int partiallyAllocated = 0;
+
+		// Un SEUL parcours de la liste O(N)
+		for (LineItem line : this.lineItems) {
+			if(line.getStatus()== null){
+				throw  new IllegalArgumentException("item muss contain a status");
+			}
+			switch (line.getStatus()) {
+				case CANCELLED -> cancelled++;
+				case FULLY_ALLOCATED -> fullyAllocated++;
+				case PARTIALLY_ALLOCATED -> partiallyAllocated++;
+				case NOT_ALLOCATED -> { /* Compté implicitement dans total */ }
+			}
+		}
+
+		// Machine à états explicite (Exhaustive)
+		if (cancelled == total) {
+			this.status = OrderStatus.CANCELLED;
+		} else if (fullyAllocated + cancelled == total) {
+			this.status = OrderStatus.FULLY_ALLOCATED;
+		} else if (partiallyAllocated > 0 || fullyAllocated > 0 ) {
+			this.status = OrderStatus.PARTIALLY_ALLOCATED;
+		} else {
+			this.status = OrderStatus.PENDING; // ou ALLOCATION_FAILED selon tes règles
+		}
 	}
 
+	/**
+	 * Extrait les LineItemId éligibles à l'annulation parmi les UUIDs demandés.
+	 * Complexité : O(N + M) au lieu de O(N * M)
+	 */
+	public List<LineItemId> extractEligibleLineIdsForCancellation(List<UUID> requestedUuids) {
+		if (requestedUuids == null || requestedUuids.isEmpty()) {
+			return List.of();
+		}
 
+		else if(isEmptyOrNull(this.lineItems)){
+			throw new NullPointerException("list item muss not be null");
+		};
+
+		// Lookup O(1) pour les UUIDs demandés
+		Set<UUID> targetUuids = new HashSet<>(requestedUuids);
+
+		return this.lineItems.stream()
+			// 1. La ligne fait-elle partie de la demande ? (O(1))
+			.filter(line -> targetUuids.contains(line.getId().getValue()))
+			// 2. Est-elle dans un statut permettant l'annulation ?
+			.filter(line -> line.getStatus() != LineItemStatus.CANCELLED)
+			// 3. Extraction de l'ID métier
+			.map(LineItem::getId)
+			.toList();
+	}
 	/**
 	 * C'est l'entité qui prend la responsabilité complète du filtrage métier.
 	 * Elle prend les IDs bruts et extrait uniquement ceux qui sont éligibles.
-	 */
+
 	public List<LineItemId> extractEligibleLineIdsForCancellation(List<UUID> requestedUuids) {
-
-
 		return requestedUuids.stream()
 			.map(LineItemId::new)
 			.filter(this::isLineEligibleForCancellation) // Utilise la règle interne
@@ -221,30 +290,33 @@ public class CustomerOrder {
 			.map(line -> line.getStatus() != LineItemStatus.CANCELLED)
 			.orElse(false);
 	}
+	 */
 
     public boolean isCancellable() {
         return status != OrderStatus.CANCELLED && status != OrderStatus.FULLY_ALLOCATED;
     }
 
-    /** Retrouve une ligne de commande par son ID — utile pour la validation côté service. */
-    public Optional<LineItem> findLineItem(LineItemId lineItemId) {
-        return lineItems.stream().filter(li -> li.getId().equals(lineItemId)).findFirst();
-    }
-
-    /** Annule toute la commande — toutes les lignes non encore annulées sont annulées. */
-    public void cancel(CancellationSource cancellationSource,String reason,String cancelBy) {
-        if (this.status == OrderStatus.FULLY_ALLOCATED) {
-            throw new IllegalStateException("Cannot cancel a completed order: " + id);
-        }
-        this.status = OrderStatus.CANCELLED;
+	/** Annule toute la commande — toutes les lignes non encore annulées sont annulées. */
+	public void cancel(CancellationSource cancellationSource,String reason,String cancelBy) {
+		if (this.status == OrderStatus.FULLY_ALLOCATED || this.status == CANCELLED ) {
+			throw new IllegalStateException("Cannot cancel a completed or cancelled order: " + id);
+		}
+		else if(isEmptyOrNull(this.lineItems)){
+			throw new NullPointerException("list item muss not be null");
+		};
+		this.status = OrderStatus.CANCELLED;
 		this.cancelReason = reason;
-        this.cancelledAt = Instant.now();
-        this.cancellationSource = cancellationSource;
+		this.cancelledAt = Instant.now();
+		this.cancellationSource = cancellationSource;
 		this.cancelBy = cancelBy;
-        lineItems.stream()
-                .filter(li -> li.getStatus() != LineItemStatus.CANCELLED)
-                .forEach(LineItem::cancel);
-    }
+		lineItems.stream()
+			.filter(li -> li.getStatus() != LineItemStatus.CANCELLED)
+			.forEach(LineItem::cancel);
+	}
+
+	private boolean isEmptyOrNull(List<LineItem>lineItems){
+			return (this.lineItems.isEmpty() || this.lineItems == null);
+	}
 
 	public static OrderId createIdFrom(UUID rawUuid) {
 		return new OrderId(rawUuid);
@@ -311,50 +383,141 @@ public class CustomerOrder {
 
     /** Modifie la quantité demandée et le prix unitaire d'une ligne existante. */
     public void updateLineItem(LineItemId lineItemId, Quantity requestedQty, BigDecimal unitPrice) {
+
+	    validateDetailsItem(lineItemId,requestedQty,unitPrice);
+
         LineItem line = findLineItem(lineItemId)
                 .orElseThrow(() -> new LineItemNotFoundException("LineItem not found: " + lineItemId));
+
         line.updateDetails(requestedQty, unitPrice);
     }
 
+	private void validateDetailsItem( LineItemId lineItemId, Quantity requestedQty, BigDecimal unitPrice){
+		// 2. Pre-conditions / Defense against nulls
+		Objects.requireNonNull(lineItemId, "lineItemId must not be null");
+		Objects.requireNonNull(requestedQty, "requestedQty must not be null");
+		Objects.requireNonNull(unitPrice, "unitPrice must not be null");
+
+		//  (Optionnel) Validation des invariants de valeur
+		if (unitPrice.compareTo(BigDecimal.ZERO) < 0) {
+			throw new IllegalArgumentException("unitPrice cannot be negative: " + unitPrice);
+		}
+
+	}
+
     /** Retire définitivement une ligne de la commande — orphanRemoval=true déclenche le DELETE SQL au flush. */
     public void removeLineItem(LineItemId lineItemId) {
+		Objects.requireNonNull(lineItemId, "lineItemId must not be null");
         LineItem line = findLineItem(lineItemId)
                 .orElseThrow(() -> new LineItemNotFoundException("LineItem not found: " + lineItemId));
         this.lineItems.remove(line);
     }
 
-
-
-
-
+	// probleme de security a gerer  apres
    public void updateOrderStatus(OrderStatus orderStatus){
+		    if(this.status == OrderStatus.FULLY_ALLOCATED || this.status == CANCELLED){
+				throw new InvalidOrderStateException("Impossible d'annuler une commande déjà expédiée ou deja supprimer");
+			}
 		    this.status = orderStatus;
    }
 
-   private  Optional<LineItem> findLineById(UUID lineId){
-	   return this.lineItems.stream()
-		   .filter(item -> item.getId().getValue().equals(lineId))
-		   .findFirst();
-   }
+
 
    public void updateLineItemStatus( Map<UUID, LineItemStatus> lineStatusUpdates) {
+
+	   // 1. Validations & Pre-conditions
+	   validateLineStatusToUpdate(lineStatusUpdates);
+
+
+	   // 3. OPTIMISATION ALGORITHMIQUE : Indexation en O(M)
+	   // Transforme la List<LineItem> en Map<UUID, LineItem> pour un accès O(1)
+	   Map<UUID, LineItem> lineItemMap = indexLineItemsById();
 
 	   for (Map.Entry<UUID, LineItemStatus> entry : lineStatusUpdates.entrySet()) {
 		   UUID lineId = entry.getKey();
 		   LineItemStatus newStatus = entry.getValue();
 
-		   LineItem line = findLineById(lineId)
-			   .orElseThrow(() -> new IllegalArgumentException(
-				   "OrderLine " + lineId + " not found in CustomerOrder " + this.id
-			   ));
+		   // Recherche O(1) au lieu de O(M)
+		   LineItem line = lineItemMap.get(lineId);
+		   if (line == null) {
+			   throw new IllegalArgumentException(
+				   "LineItem [" + lineId + "] not found in CustomerOrder [" + this.id.getValue() + "]"
+			   );
+		   }
 
-		   // L'entité OrderLine gère sa propre validation / transition
-		   line.changeLineStatus(newStatus);
+		   try {
+			   // L'entité OrderLine gère sa propre validation / transition
+			   line.changeLineStatus(newStatus);
+		   } catch (Exception ex) {
+			   // Loggez le contexte exact pour corriger la donnée
+			   throw new IllegalStateException(
+				   String.format("Échec du changement de statut pour la ligne %s vers %s dans la commande %s. Cause: %s",
+					   lineId, newStatus, this.id.getValue(), ex.getMessage()), ex
+			   );
+		   }
 	   }
 
-	   // 🟢 FIN : Hibernate détecte les statuts modifiés en RAM et met à jour la BDD au commit
    }
 
+	public void validateOrderStateForCancellation() {
+		if (this.status == OrderStatus.CANCELLED || this.status == OrderStatus.FULLY_ALLOCATED) {
+			throw new OrderCancellationException("Cannot modify a fully cancelled order with status: " + this.status);
+		}
+	}
+
+	public void validateCancellationEligibility() {
+		if (status == OrderStatus.FULLY_ALLOCATED || status == CANCELLED) {
+			throw new OrderCancellationException("Cannot cancel a completed or cancelled order: " + status);
+		}
+	}
+
+	/**
+	 * Extrait directement les valeurs d'identifiants des lignes de commande.
+	 */
+	public List<UUID> extractLineItemUuids() {
+		return this.lineItems.stream()
+			.map(line -> line.getId().getValue())
+			.toList();
+	}
+
+	/**
+	 * 🔒 Détail d'implémentation (Helper privé)
+	 * Indexe la liste des lignes de commande en Map O(1) pour accélérer les recherches.
+	 */
+	private Map<UUID, LineItem> indexLineItemsById() {
+		return this.lineItems.stream()
+			.collect(Collectors.toMap(
+				item -> item.getId().getValue(),
+				Function.identity()
+			));
+	}
+
+   private void  validateLineStatusToUpdate(Map<UUID, LineItemStatus> lineStatusUpdates){
+	   Objects.requireNonNull(lineStatusUpdates, "lineStatusUpdates map must not be null");
+	   if (lineStatusUpdates.isEmpty()) {
+		   return;
+	   }
+   }
+
+   private void validateOrderStatus(OrderStatus orderStatus){
+	   if (this.status == OrderStatus.CANCELLED || this.status == OrderStatus.FULLY_ALLOCATED) {
+		   throw new OrderStateConflictException(
+			   "Cannot update line items for order [" + this.id.getValue() + "] in status " + this.status
+		   );
+	   }
+   }
+
+	// Dans CustomerOrder.java
+	private Optional<LineItem> findLineItem(LineItemId lineItemId) {
+		if (lineItemId == null) return Optional.empty();
+
+		for (LineItem item : this.lineItems) {
+			if (item.getId().equals(lineItemId)) {
+				return Optional.of(item);
+			}
+		}
+		return Optional.empty();
+	}
 
 	public  BigDecimal calculateTotal(){
 		BigDecimal total = getLineItems().stream()

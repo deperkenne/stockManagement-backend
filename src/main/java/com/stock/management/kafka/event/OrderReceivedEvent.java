@@ -12,6 +12,8 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Set;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Data
@@ -51,18 +53,59 @@ public class OrderReceivedEvent {
     }
 
 
+
 	public static List<OrderReceivedEvent> sortByPriority(List<OrderReceivedEvent> events) {
 		return events.stream()
-			.sorted(Comparator.comparingInt(
-				(OrderReceivedEvent e) -> priorityOrdinal(e.getPriority())).reversed())
+			.sorted(
+				Comparator.comparingInt((OrderReceivedEvent e) -> priorityOrdinal(e.getPriority()))
+					.thenComparing(OrderReceivedEvent::getOccurredAt)
+			)
 			.collect(Collectors.toList());
 	}
 
 	private static int priorityOrdinal(String priority) {
-		try {
-			return Priority.valueOf(priority).ordinal();
-		} catch (IllegalArgumentException e) {
-			return Priority.NORMAL.ordinal();
+		return parsePriority(priority).ordinal();
+	}
+
+	private static Priority parsePriority(String priority) {
+		if (priority == null) {
+			return Priority.NORMAL;
 		}
+		try {
+			return Priority.valueOf(priority.trim().toUpperCase());
+		} catch (IllegalArgumentException e) {
+			return Priority.NORMAL;
+		}
+	}
+	public static List<OrderReceivedEvent> newEventsToProcess(List<OrderReceivedEvent>orderReceivedEvents, Set<UUID> alreadyAllocatedIds){
+		List<OrderReceivedEvent> filteredOrderReceivedEvent = orderReceivedEvents.stream()
+			.filter(event -> {
+				boolean isAlreadyProcessed = alreadyAllocatedIds.contains(event.getOrderId());
+				return !isAlreadyProcessed;
+			})
+			.toList();
+		// Si aucun nouvel événement n'est à traiter
+		if (filteredOrderReceivedEvent.isEmpty()) {
+			throw new IllegalStateException("Tous les événements du batch ont déjà été alloués/traités.");
+		}
+		return filteredOrderReceivedEvent;
+	}
+
+	public static List<String> extractAndSortSkuCodes(List<OrderReceivedEvent> events) {
+		return events.stream()
+			.flatMap(e -> e.getLines().stream())
+			.map(OrderReceivedEvent.OrderLine::getSku)
+			.distinct()
+			.sorted() // Tri alphabétique anti-deadlock
+			.collect(Collectors.toList());
+	}
+
+
+	public static List<String> extractAndSortSkuCodes(OrderReceivedEvent event) {
+		return event.getLines().stream()
+			.map(OrderReceivedEvent.OrderLine::getSku)
+			.distinct()
+			.sorted() // Tri alphabétique anti-deadlock
+			.collect(Collectors.toList());
 	}
 }

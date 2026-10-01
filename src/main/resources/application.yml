@@ -2,6 +2,22 @@
 server:
   port: 8090
 
+logging:
+  # Emplacement et nom du fichier de log sur votre lecteur Z:
+  file:
+    name: C:/temp/app-logs/fintech-app.log
+  level:
+    # Affiche le moment exact où la transaction est marquée rollback-only et par qui
+    org.springframework.transaction: DEBUG
+    # Affiche les requêtes SQL et les erreurs Hibernate
+    org.hibernate.SQL: DEBUG
+    org.hibernate.orm.deprecation: ERROR
+  logback:
+    # Rotation des fichiers : taille max de 10 Mo par fichier, conservation sur 30 jours
+    rolling policy.max-file-size=10MB
+    rolling policy.max-history=30
+
+
 spring:
   application:
     name: management
@@ -24,7 +40,7 @@ spring:
     hibernate:
       ddl-auto: update        # update = crée les tables si elles n'existent pas, ajoute les colonnes manquantes sans supprimer les données
     open-in-view: false
-    show-sql: true            # affiche les requêtes SQL dans la console
+   # show-sql: true            # affiche les requêtes SQL dans la console
     properties:
       hibernate:
         format_sql: true
@@ -61,7 +77,7 @@ spring:
       properties:
         fetch.min.bytes: 50000 # si les 50000 octect sont atteint avant le fetch.max.wait.time le broker envoie le message au thread specifique
         fetch.max.wait.ms: 500 # meme si fetch.min.bytes n#est pas atteind et que fetch.max.wait.time est arriver le broker envoi les message au thread destinee
-        max.poll.interval.ms: 300000 # ci apres ce temps passer le thread n'a pas encore fini kafka declenche un Rebalance et declare le thread comme defectueux
+        max.poll.interval.ms: 3000000 # ci apres ce temps passer le thread n'a pas encore fini kafka declenche un Rebalance et declare le thread comme defectueux
         session.timeout.ms: 30000
         heartbeat.interval.ms: 10000 # bip envoyer a kafka tte les 10seconde pour  lui dire que tout marche
         spring.json.trusted.packages: "com.stock.management.kafka.event"
@@ -70,7 +86,7 @@ spring:
     listener:
       type: batch # 👈 INDISPENSABLE pour recevoir la List<ConsumerRecord>
       ack-mode: manual_immediate
-      concurrency: 3
+      concurrency: 1
       poll-timeout: 3000
       missing-topics-fatal: false
 

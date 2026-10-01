@@ -9,9 +9,8 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import jakarta.persistence.LockModeType;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
+
+import java.util.*;
 
 public interface SkuRepository extends JpaRepository<Sku, SkuId> {
 
@@ -62,7 +61,9 @@ public interface SkuRepository extends JpaRepository<Sku, SkuId> {
     @Query("SELECT COUNT(s) > 0 FROM Sku s WHERE s.location.code = :code AND s.id <> :id")
     boolean existsByLocationCodeExcludingId(@Param("code") String code, @Param("id") SkuId id);
 
-
+	@Lock(LockModeType.PESSIMISTIC_WRITE)
+	@Query("SELECT s FROM Sku s WHERE s.id IN :skuIds")
+	List<Sku> findAllByIdWithLock(@Param("skuIds") Set<SkuId> skuIds);
 
 
 }

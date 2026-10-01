@@ -1,5 +1,6 @@
 package com.stock.management.domain;
 
+import com.stock.management.allocationLine.AllocationItem;
 import com.stock.management.allocationLine.AllocationItemRepository;
 import com.stock.management.kafka.config.KafkaTopics;
 import com.stock.management.kafka.event.OrderReceivedEvent;
@@ -12,6 +13,7 @@ import com.stock.management.order.dto.CreateOrderRequest;
 import com.stock.management.order.dto.CreateOrderResponse;
 import com.stock.management.order.dto.LineItemRequest;
 import com.stock.management.sku.SkuRepository;
+import com.stock.management.sku.SkuService;
 import com.stock.management.sku.domain.Sku;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.OffsetSpec;
@@ -24,6 +26,8 @@ import org.springframework.data.domain.Sort;
 import org.springframework.kafka.core.KafkaAdmin;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.transaction.TestTransaction;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -43,7 +47,7 @@ import static org.awaitility.Awaitility.await;
 @ActiveProfiles("test")
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public class OrderReceivedBatchListenerIT {
-	private static final String TEST_TOPIC = KafkaTopics.ORDER_RECEIVED_TEST02;
+	private static final String TEST_TOPIC = KafkaTopics.ORDER_RECEIVED_TEST03;
 
 	@Autowired
 	private KafkaTemplate<String, Object> kafkaTemplate;
@@ -52,6 +56,7 @@ public class OrderReceivedBatchListenerIT {
 	@Autowired private  SkuRepository skuRepository;
 	@Autowired private  OrderOutboxRepository outboxRepository;
 	@Autowired private  AllocationItemRepository allocationItemRepository;
+	@Autowired private SkuService skuService;
 
 
 
@@ -60,15 +65,15 @@ public class OrderReceivedBatchListenerIT {
 	static void purgeTestTopic(@Autowired KafkaAdmin kafkaAdmin) throws Exception {
 		try (AdminClient admin = AdminClient.create(kafkaAdmin.getConfigurationProperties())) {
 			Map<String, Object> endOffsets = admin.listOffsets(
-					Map.of(new TopicPartition(KafkaTopics.ORDER_RECEIVED_TEST02, 0), OffsetSpec.latest())
+					Map.of(new TopicPartition(KafkaTopics.ORDER_RECEIVED_TEST03, 0), OffsetSpec.latest())
 				).all().get(10, TimeUnit.SECONDS)
 				.entrySet().stream()
 				.collect(Collectors.toMap(e -> e.getKey().toString(), e -> e.getValue().offset()));
 
-			long latestOffset = (long) endOffsets.get(KafkaTopics.ORDER_RECEIVED_TEST02 + "-0");
+			long latestOffset = (long) endOffsets.get(KafkaTopics.ORDER_RECEIVED_TEST03 + "-0");
 
 			admin.deleteRecords(Map.of(
-				new TopicPartition(KafkaTopics.ORDER_RECEIVED_TEST02, 0),
+				new TopicPartition(KafkaTopics.ORDER_RECEIVED_TEST03, 0),
 				RecordsToDelete.beforeOffset(latestOffset)
 			)).all().get(10, TimeUnit.SECONDS);
 		}
@@ -83,35 +88,18 @@ public class OrderReceivedBatchListenerIT {
 		allocationItemRepository.deleteAll();
 	}
 
+
 	private LineItemRequest createLineItemRequest(String productNr, int quantity, BigDecimal unitPrice){
 		return new LineItemRequest(productNr, quantity, unitPrice);
 	}
 
-	private List<Sku> createAndSaveSku(){
-		return skuRepository.saveAll(List.of(
+	private void createAndSaveSku() {
+		 skuService.saveSkus(List.of(
 			Sku.create(new ProductNr("PROD01"), new Quantity(90), "WA-01"),
 			Sku.create(new ProductNr("PROD02"), new Quantity(80), "WA-02"),
 			Sku.create(new ProductNr("PROD03"), new Quantity(20), "WA-03")
 		));
 	}
-
-	private List<CustomerOrder> createCustomerOrders() {
-		LineItemRequest l1 = createLineItemRequest("PROD01", 40, new BigDecimal("10.00"));
-		LineItemRequest l2 = createLineItemRequest("PROD02", 40, new BigDecimal("10.00"));
-		LineItemRequest l3 = createLineItemRequest("PROD01", 40, new BigDecimal("10.00"));
-		LineItemRequest l4 = createLineItemRequest("PROD02", 20, new BigDecimal("10.00"));
-		LineItemRequest l5 = createLineItemRequest("PROD01", 30, new BigDecimal("10.00"));
-		LineItemRequest l6 = createLineItemRequest("PROD02", 20, new BigDecimal("10.00"));
-
-		LineItemRequest l7 = createLineItemRequest("PROD01", 20, new BigDecimal("10.00"));
-		LineItemRequest l8 = createLineItemRequest("PROD02", 10, new BigDecimal("10.00"));
-
-		CustomerOrder saveCustomerOrder = CustomerOrder.create(Priority.LOW, false, "EUR", List.of(l1, l2));
-		CustomerOrder saveCustomerOrder02 = CustomerOrder.create(Priority.HIGH, true, "EUR", List.of(l3, l4));
-		CustomerOrder saveCustomerOrder03 = CustomerOrder.create(Priority.NORMAL, true, "EUR", List.of(l5, l6));
-		return List.of(saveCustomerOrder, saveCustomerOrder02,saveCustomerOrder03);
-	}
-
 
 
 
@@ -124,138 +112,44 @@ public class OrderReceivedBatchListenerIT {
 	) {}
 
 
-	/**
-	 * Variante END-TO-END : passe par le vrai chemin production, outbox inclus.
-	 * OutboxPublisher.processOutboxEvents() tourne toutes les 3s (@Scheduled fixedDelay=3000)
-	 * et traite jusqu'à 50 entrées PENDING/FAILED par cycle — largement suffisant pour
-	 * absorber nos 3 commandes de test en UN SEUL cycle, pas besoin d'attendre plusieurs
-	 * passages. Le timeout de 20s reste confortable (~6 cycles) sans être excessif.
-	 * Utile pour valider le pipeline complet ; le test ci-dessus reste préférable
-	 * pour un feedback rapide sur le listener seul, isolé de l'outbox.
-	 */
-	@Test
-	@DisplayName("End-to-end : receiveOrder() → outbox → poller (3s) → Kafka → listener → allocation, sans contourner l'outbox")
-	void fullPipeline_fromReceiveOrderThroughOutboxToAllocation_eventuallyAllocatesAllOrders() throws InterruptedException, ExecutionException, TimeoutException {
-		// GIVEN : stock préexistant pour 3 produits distincts
-		// create and save Sku
-		// create and save Sku
-		createAndSaveSku();
-
-		// saved tree Customer order parelelle
-		LineItemRequest item01 = new LineItemRequest("PROD01", 40, new BigDecimal("10.00"));
-		LineItemRequest item02 = new LineItemRequest("PROD02", 40, new BigDecimal("10.00"));
-		LineItemRequest item03 = new LineItemRequest("PROD01", 50, new BigDecimal("10.00"));
-		LineItemRequest item04 = new LineItemRequest("PROD02", 20, new BigDecimal("10.00"));
-		LineItemRequest item05 = new LineItemRequest("PROD01", 40, new BigDecimal("10.00"));
-		LineItemRequest item06 = new LineItemRequest("PROD02", 20, new BigDecimal("10.00"));
-		LineItemRequest item07 = createLineItemRequest("PROD01", 50, new BigDecimal("10.00"));
-		LineItemRequest item08 = createLineItemRequest("PROD02", 50, new BigDecimal("10.00"));
-
-		CreateOrderRequest createOrderRequest01 = new CreateOrderRequest(
-			Priority.LOW, false, "EUR", List.of(item01, item02));
-
-		CreateOrderRequest createOrderRequest04 = new CreateOrderRequest(
-			Priority.NORMAL, false, "EUR", List.of(item07, item08));
-
-		CreateOrderRequest createOrderRequest02 = new CreateOrderRequest(
-			Priority.HIGH, true, "EUR", List.of(item03, item04));
-
-		CreateOrderRequest createOrderRequest03 = new CreateOrderRequest(
-			Priority.NORMAL, true, "EUR", List.of(item05, item06));
-
-
-
-
-		String lowOrderId = orderService.receiveOrder(createOrderRequest01).orderId();
-		String normalOrderId2 = orderService.receiveOrder(createOrderRequest04).orderId();
-		String highOrderId = orderService.receiveOrder(createOrderRequest02).orderId();
-		String normalOrderId = orderService.receiveOrder(createOrderRequest03).orderId();
-
-
-
-		List<String> orderIds = List.of(lowOrderId, highOrderId, normalOrderId);
-
-		// THEN : on attend que TOUTES les commandes soient sorties de l'état PENDING
-		orderIds.forEach(id ->
-			await()
-				.atMost(15, TimeUnit.SECONDS)
-				.pollInterval(200, TimeUnit.MILLISECONDS)
-				.untilAsserted(() -> {
-					CustomerOrder order = orderRepository.findById(new OrderId(UUID.fromString(id))).orElseThrow();
-					assertThat(order.getStatus()).isIn(
-						OrderStatus.ALLOCATION_FAILED,
-						OrderStatus.FULLY_ALLOCATED,
-						OrderStatus.PARTIALLY_ALLOCATED
-					);
-				})
-		);
-
-
-		CustomerOrder orderLow = orderRepository.findById(new OrderId(UUID.fromString(lowOrderId))).orElseThrow();
-		CustomerOrder orderLow2 = orderRepository.findById(new OrderId(UUID.fromString(normalOrderId2))).orElseThrow();
-		CustomerOrder orderHigh = orderRepository.findById(new OrderId(UUID.fromString(highOrderId))).orElseThrow();
-		CustomerOrder orderNormal = orderRepository.findById(new OrderId(UUID.fromString(normalOrderId))).orElseThrow();
-
-		assertThat(orderLow.getStatus())
-			.as("LOW (orderId=%s)", lowOrderId)
-			.isEqualTo(OrderStatus.FULLY_ALLOCATED);
-		assertThat(orderLow2.getStatus())
-			.as("NORMAL (orderId=%s)", normalOrderId)
-			.isEqualTo(OrderStatus.CANCELLED);
-		assertThat(orderHigh.getStatus())
-			.as("HIGH (orderId=%s)", highOrderId)
-			.isEqualTo(OrderStatus.FULLY_ALLOCATED);
-		assertThat(orderNormal.getStatus())
-			.as("NORMAL (orderId=%s)", normalOrderId)
-			.isEqualTo(OrderStatus.ALLOCATION_FAILED);
-
-
-		// THEN : l'outbox doit être passée précisément à SENT
-		assertThat(outboxRepository.findAll())
-			.as("Une fois publiées avec succès par le poller, les entrées outbox doivent être SENT")
-			.filteredOn(entry -> orderIds.contains(entry.getAggregateId()))
-			.extracting(OrderOutBox::getStatus)
-			.containsOnly(OrderOutBox.OutboxStatus.SENT);
-	}
-
-
-	@Test
+	@RepeatedTest(value = 8, name = "Run {currentRepetition}/{totalRepetitions}")
 	void deleteTest(){
 		// GIVEN : stock préexistant pour 3 produits distincts
 		// create and save Sku
 		// create and save Sku
 		createAndSaveSku();
 
+
+		// saved tree Customer order parelelle
 		// saved tree Customer order parelelle
 		LineItemRequest item01 = new LineItemRequest("PROD01", 40, new BigDecimal("10.00"));
-		LineItemRequest item02 = new LineItemRequest("PROD02", 40, new BigDecimal("10.00"));
+		LineItemRequest item02 = new LineItemRequest("PROD02", 60, new BigDecimal("10.00"));
 		LineItemRequest item03 = new LineItemRequest("PROD01", 50, new BigDecimal("10.00"));
 		LineItemRequest item04 = new LineItemRequest("PROD02", 20, new BigDecimal("10.00"));
 		LineItemRequest item05 = new LineItemRequest("PROD01", 40, new BigDecimal("10.00"));
 		LineItemRequest item06 = new LineItemRequest("PROD02", 20, new BigDecimal("10.00"));
-		LineItemRequest item07 = createLineItemRequest("PROD01", 50, new BigDecimal("10.00"));
-		LineItemRequest item08 = createLineItemRequest("PROD02", 50, new BigDecimal("10.00"));
+		LineItemRequest item07 = createLineItemRequest("PROD01", 60, new BigDecimal("10.00"));
+		LineItemRequest item08 = createLineItemRequest("PROD02", 40, new BigDecimal("10.00"));
 
-		CreateOrderRequest createOrderRequest01 = new CreateOrderRequest(
+		CreateOrderRequest createOrderRequestLowF = new CreateOrderRequest(
 			Priority.LOW, false, "EUR", List.of(item01, item02));
-		CreateOrderRequest createOrderRequest04 = new CreateOrderRequest(
-			Priority.NORMAL, false, "EUR", List.of(item07, item08));
 
-		CreateOrderRequest createOrderRequest02 = new CreateOrderRequest(
+		CreateOrderRequest createOrderRequestHighT = new CreateOrderRequest(
 			Priority.HIGH, true, "EUR", List.of(item03, item04));
 
-		CreateOrderRequest createOrderRequest03 = new CreateOrderRequest(
+		CreateOrderRequest createOrderRequestNorT = new CreateOrderRequest(
 			Priority.NORMAL, true, "EUR", List.of(item05, item06));
 
+		CreateOrderRequest createOrderRequestNorF = new CreateOrderRequest(
+			Priority.NORMAL, false, "EUR", List.of( item07, item08));
 
 
-		String lowOrderId = orderService.receiveOrder(createOrderRequest01).orderId();
-		String normalOrderId2 = orderService.receiveOrder(createOrderRequest04).orderId();
+		String lowFalseOrderId = orderService.receiveOrder(createOrderRequestLowF).orderId();
+		String highTrueOrderId = orderService.receiveOrder(createOrderRequestHighT).orderId();
+		String normalTrueOrderId = orderService.receiveOrder(createOrderRequestNorT).orderId();
+		String normalFalseOrderId = orderService.receiveOrder(createOrderRequestNorF).orderId();
 
-		String highOrderId = orderService.receiveOrder(createOrderRequest02).orderId();
-		String normalOrderId = orderService.receiveOrder(createOrderRequest03).orderId();
-
-		List<String> orderIds = List.of(lowOrderId, highOrderId, normalOrderId,normalOrderId2);
+		List<String> orderIds = List.of(lowFalseOrderId, highTrueOrderId, normalTrueOrderId,normalFalseOrderId);
 
 		// THEN : on attend que TOUTES les commandes soient sorties de l'état PENDING
 		orderIds.forEach(id ->
@@ -272,62 +166,109 @@ public class OrderReceivedBatchListenerIT {
 				})
 		);
 
-		orderService.cancelOrder(  new OrderId(UUID.fromString(normalOrderId2
+		// Vérification complémentaire : l'outbox doit être vidée (confirme que Kafka a bien reçu les messages)
+		await()
+			.atMost(15, TimeUnit.SECONDS)   // aligné sur le même délai, > au fixedDelay du scheduler (6s)
+			.pollInterval(200, TimeUnit.MILLISECONDS)
+			.untilAsserted(() -> {
+				assertThat(outboxRepository.findAll())
+					.as("Une fois publiées avec succès par le poller, les entrées outbox doivent être SENT")
+					.filteredOn(entry -> orderIds.contains(entry.getAggregateId()))
+					.extracting(OrderOutBox::getStatus)
+					.containsOnly(OrderOutBox.OutboxStatus.SENT);
+			});
+
+		orderService.cancelOrder(
+			new OrderId(UUID.fromString(normalFalseOrderId)),
+			new CancelOrderRequest
+				(
+					"client01",
+					"client request",
+					CancellationSource.CUSTOMER_APP,
+					null
+				)
+		);
 
 
-			)),
-			new CancelOrderRequest("client01", "client request", CancellationSource.CUSTOMER_APP, null));
+		CustomerOrder orderCplFalseLow = orderRepository.findById(new OrderId(UUID.fromString(lowFalseOrderId))).orElseThrow();
+		CustomerOrder orderCplTrueHigh  = orderRepository.findById(new OrderId(UUID.fromString(highTrueOrderId))).orElseThrow();
+		CustomerOrder orderCplTrueNormal = orderRepository.findById(new OrderId(UUID.fromString(normalTrueOrderId))).orElseThrow();
+		CustomerOrder orderCplFalseNormal  = orderRepository.findById(new OrderId(UUID.fromString(normalFalseOrderId))).orElseThrow();
 
-		CustomerOrder orderLow = orderRepository.findByIdWithLineItems(new OrderId(UUID.fromString(lowOrderId))).orElseThrow();
-		CustomerOrder orderHigh = orderRepository.findByIdWithLineItems(new OrderId(UUID.fromString(highOrderId))).orElseThrow();
-		CustomerOrder orderNormal = orderRepository.findByIdWithLineItems(new OrderId(UUID.fromString(normalOrderId))).orElseThrow();
-		CustomerOrder orderNormal2 = orderRepository.findByIdWithLineItems(new OrderId(UUID.fromString(normalOrderId2))).orElseThrow();
-
-
-		assertThat(orderLow.getStatus())
-			.as("LOW (orderId=%s)", lowOrderId)
+		assertThat(orderCplFalseLow.getStatus())
+			.as("orderCplFalseLow (orderId=%s)", lowFalseOrderId)
+			.isEqualTo(OrderStatus.PARTIALLY_ALLOCATED);
+		assertThat(orderCplTrueHigh.getStatus())
+			.as("orderCplTrueHigh(orderId=%s)", highTrueOrderId)
 			.isEqualTo(OrderStatus.FULLY_ALLOCATED);
-		assertThat(orderHigh.getStatus())
-			.as("HIGH (orderId=%s)", highOrderId)
+		assertThat(orderCplTrueNormal.getStatus())
+			.as("orderCplTrueNormal (orderId=%s)", normalTrueOrderId)
 			.isEqualTo(OrderStatus.FULLY_ALLOCATED);
-		assertThat(orderNormal.getStatus())
-			.as("NORMAL (orderId=%s)", normalOrderId)
-			.isEqualTo(OrderStatus.ALLOCATION_FAILED);
-		assertThat(orderNormal2.getStatus())
-			.as("NORMAL (orderId=%s)", normalOrderId)
+		assertThat(orderCplFalseNormal.getStatus())
+			.as("orderCplTrueNormal (orderId=%s)", normalFalseOrderId)
 			.isEqualTo(OrderStatus.CANCELLED);
 
-		assertThat(orderLow.getLineItems().getFirst().getStatus())
-			.as("LOW (orderId=%s)", lowOrderId)
-			.isEqualTo(LineItemStatus.FULLY_ALLOCATED);
+		assertAllocationItemB(
+			                   List.of
+			                       (
 
-		assertThat(orderLow.getLineItems().get(1).getStatus())
-			.as("LOW (orderId=%s)", lowOrderId)
-			.isEqualTo(LineItemStatus.FULLY_ALLOCATED);
+				                    UUID.fromString(highTrueOrderId),
+				                    UUID.fromString(normalTrueOrderId),
+			                        UUID.fromString(normalFalseOrderId),
+									   UUID.fromString(lowFalseOrderId)
 
-		assertThat(orderHigh.getLineItems().getFirst().getStatus())
-			.as("LOW (orderId=%s)", lowOrderId)
-			.isEqualTo(LineItemStatus.FULLY_ALLOCATED);
-		assertThat(orderHigh.getLineItems().get(1).getStatus())
-			.as("LOW (orderId=%s)", lowOrderId)
-			.isEqualTo(LineItemStatus.FULLY_ALLOCATED);
+			                  )
+		);
+	}
 
 
-		assertThat(orderNormal2.getLineItems().getFirst().getStatus())
-			.as("LOW (orderId=%s)", lowOrderId)
-			.isEqualTo(LineItemStatus.CANCELLED);
+	private void assertAllocationItemB(List<UUID> orderIds){
+		List<AllocationItem> allocationItemsB = allocationItemRepository.findAlreadyAllocatedOrders(orderIds);
 
-		assertThat(orderNormal2.getLineItems().get(1).getStatus())
-			.as("LOW (orderId=%s)", lowOrderId)
-			.isEqualTo(LineItemStatus.CANCELLED);
+		Map<UUID, List<AllocationItem>> allocationItemsByOrderId = allocationItemsB.stream()
+			.collect(Collectors.groupingBy(
+				item -> item.getOrderId(),      // extraction de la clé UUID
+				Collectors.toCollection(ArrayList::new)  // force ArrayList comme type de collection pour chaque groupe
+			));
 
-		assertThat(orderNormal.getLineItems().getFirst().getStatus())
-			.as("LOW (orderId=%s)", lowOrderId)
-			.isEqualTo(LineItemStatus.NOT_ALLOCATED);
 
-		assertThat(orderNormal.getLineItems().get(1).getStatus())
-			.as("LOW (orderId=%s)", lowOrderId)
-			.isEqualTo(LineItemStatus.NOT_ALLOCATED);
+
+		List<AllocationItem> allocationItems1 = allocationItemsByOrderId.get(orderIds.getFirst());
+		List<AllocationItem> allocationItems2 = allocationItemsByOrderId.get(orderIds.get(1));
+		List<AllocationItem> allocationItems3 = allocationItemsByOrderId.get(orderIds.get(2));
+		List<AllocationItem> allocationItems4 = allocationItemsByOrderId.get(orderIds.get(3));
+
+
+		assertThat(allocationItemsB.size())
+			.as("allocationsize (orderId=%s)", "Before")
+			.isEqualTo(7);
+
+		assertThat(allocationItems1.getFirst().getQuantity())
+			.as("getQuantityHighT (orderId=%s)", "")
+			.isEqualTo(50);
+
+		assertThat(allocationItems1.get(1).getQuantity())
+			.as("getQuantityHighT (orderId=%s)", "")
+			.isEqualTo(20);
+
+
+
+		assertThat(allocationItems2.getFirst().getQuantity())
+			.as("getQuantityHighT (orderId=%s)", "")
+			.isEqualTo(40);
+
+
+		assertThat(allocationItems2.get(1).getQuantity())
+			.as("getQuantityHighT (orderId=%s)", "")
+			.isEqualTo(20);
+
+		assertThat(allocationItems3.getFirst().getQuantity())
+			.as("getQuantityNorF (orderId=%s)", "")
+			.isEqualTo(40);
+
+	}
+
+	private void AssertAllocationItemA(List<OrderId> orderIds){
 
 	}
 

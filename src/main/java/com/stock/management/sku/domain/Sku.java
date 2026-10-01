@@ -56,10 +56,10 @@ public class Sku {
 
     // ─── Business methods ─────────────────────────────────────────────────────────
 
-    public void reserve(Quantity qty) {
-        if (location.isLocked()) {
+    public void reserveQty(Quantity qty) {
+        if (location.isLocked() ||  qty == null) {
             throw new IllegalStateException(
-                    "Location " + location.getCode() + " is locked: " + location.getLockedReason());
+                    "Quantity  muss not be null or negative" );
         }
         if (qty.getValue() > availableQuantity.getValue()) {
             throw new IllegalStateException(
@@ -70,7 +70,11 @@ public class Sku {
         this.availableQuantity = new Quantity(availableQuantity.getValue() - qty.getValue());
     }
 
-    public void release(Quantity qty) {
+    public void releaseRemaningQty(Quantity qty) {
+		if(qty.getValue() <= 0){
+			throw new IllegalStateException(
+				"Quantity  muss not be null or negative" );
+		}
         int released = availableQuantity.getValue() + qty.getValue();
         if (released > totalQuantity.getValue()) {
             throw new IllegalStateException(
