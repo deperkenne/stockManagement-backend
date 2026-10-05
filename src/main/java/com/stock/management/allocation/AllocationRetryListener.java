@@ -21,7 +21,6 @@ import java.util.UUID;
 public class AllocationRetryListener {
 	private final AllocationRetryService allocationRetryService;
 
-	@EventListener
 	@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
 	//@Transactional(propagation = Propagation.REQUIRES_NEW) // Ouvre une nouvelle transaction dédiée
 	public void handleOrderCreated(AllocationReleasedEvent event) {

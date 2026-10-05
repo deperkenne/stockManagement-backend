@@ -1,0 +1,99 @@
+11:28:42.169 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] start order allocation- aalo=803dfc25-5052-4c87-8ef6-bc55736097ee, name=PROD01, size=4
+11:28:42.214 [orderReceivedTestListener-0-C-1] WARN  c.s.m.allocation.AllocationService - [] [SKU verfügbar ]- skusSize=2
+11:28:42.214 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [ALLOC SKU size]- sku=2
+11:28:42.217 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [CHECHLINEIDIDIDIDDDDDDDDDDDDDDDDDDDDD]Ordre JUSTE APRÈS readValue (outbox): [PROD01, PROD02]
+11:28:42.218 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] start order process
+11:28:42.220 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [Info SUR la Ligne a traiter] - qty=50
+11:28:42.222 [orderReceivedTestListener-0-C-1] WARN  c.s.m.allocation.AllocationService - [] [ALLOC] Allocation —  allocated=50  orderId=1c80176d-e4cb-4122-bef5-a5acce1ef422 orderPrio=HIGH
+11:28:42.223 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [Info SUR la Ligne a traiter] - qty=20
+11:28:42.223 [orderReceivedTestListener-0-C-1] WARN  c.s.m.allocation.AllocationService - [] [ALLOC] Allocation —  allocated=20  orderId=1c80176d-e4cb-4122-bef5-a5acce1ef422 orderPrio=HIGH
+11:28:42.236 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [36m[ALLOCSTART][0m ALLOCATION 1c80176d-e4cb-4122-bef5-a5acce1ef422 événement(s)
+11:28:42.245 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [36m[ALLOC] [0m Allocation succeed—  lines=2
+11:28:42.245 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [CHECHLINEIDIDIDIDDDDDDDDDDDDDDDDDDDDD]Ordre JUSTE APRÈS readValue (outbox): [PROD01, PROD02]
+11:28:42.245 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] start order process
+11:28:42.245 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [Info SUR la Ligne a traiter] - qty=40
+11:28:42.245 [orderReceivedTestListener-0-C-1] WARN  c.s.m.allocation.AllocationService - [] [ALLOC] Allocation —  allocated=40  orderId=c8938910-6176-4834-af19-744c732ce5b8 orderPrio=NORMAL
+11:28:42.245 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [Info SUR la Ligne a traiter] - qty=20
+11:28:42.245 [orderReceivedTestListener-0-C-1] WARN  c.s.m.allocation.AllocationService - [] [ALLOC] Allocation —  allocated=20  orderId=c8938910-6176-4834-af19-744c732ce5b8 orderPrio=NORMAL
+11:28:42.250 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [36m[ALLOCSTART][0m ALLOCATION c8938910-6176-4834-af19-744c732ce5b8 événement(s)
+11:28:42.256 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [36m[ALLOC] [0m Allocation succeed—  lines=2
+11:28:42.256 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [CHECHLINEIDIDIDIDDDDDDDDDDDDDDDDDDDDD]Ordre JUSTE APRÈS readValue (outbox): [PROD01, PROD02]
+11:28:42.256 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] start order process
+11:28:42.257 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [Info SUR la Ligne a traiter] - qty=60
+11:28:42.257 [orderReceivedTestListener-0-C-1] WARN  c.s.m.allocation.AllocationService - [] aucune allocation dispo
+11:28:42.257 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [Info SUR la Ligne a traiter] - qty=40
+11:28:42.257 [orderReceivedTestListener-0-C-1] WARN  c.s.m.allocation.AllocationService - [] [ALLOC] Allocation —  allocated=40  orderId=8828c699-223e-4da0-9581-3193d3c015ae orderPrio=NORMAL
+11:28:42.262 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [36m[ALLOCSTART][0m ALLOCATION 8828c699-223e-4da0-9581-3193d3c015ae événement(s)
+11:28:42.266 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [36m[ALLOC] [0m Allocation succeed—  lines=1
+11:28:42.266 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [CHECHLINEIDIDIDIDDDDDDDDDDDDDDDDDDDDD]Ordre JUSTE APRÈS readValue (outbox): [PROD01, PROD02]
+11:28:42.267 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] start order process
+11:28:42.267 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [Info SUR la Ligne a traiter] - qty=40
+11:28:42.267 [orderReceivedTestListener-0-C-1] WARN  c.s.m.allocation.AllocationService - [] aucune allocation dispo
+11:28:42.267 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [Info SUR la Ligne a traiter] - qty=60
+11:28:42.268 [orderReceivedTestListener-0-C-1] WARN  c.s.m.allocation.AllocationService - [] aucune allocation dispo
+11:28:42.273 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] fin...................................................................................................
+11:28:48.150 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] start order allocation- aalo=5ee245d0-04df-4a3f-9365-c99745cf3610, name=PROD01, size=4
+11:28:48.158 [orderReceivedTestListener-0-C-1] WARN  c.s.m.allocation.AllocationService - [] [SKU verfügbar ]- skusSize=2
+11:28:48.158 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [ALLOC SKU size]- sku=2
+11:28:48.158 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [CHECHLINEIDIDIDIDDDDDDDDDDDDDDDDDDDDD]Ordre JUSTE APRÈS readValue (outbox): [PROD01, PROD02]
+11:28:48.158 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] start order process
+11:28:48.160 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [Info SUR la Ligne a traiter] - qty=40
+11:28:48.160 [orderReceivedTestListener-0-C-1] WARN  c.s.m.allocation.AllocationService - [] [ALLOC] Allocation —  allocated=40  orderId=5ee245d0-04df-4a3f-9365-c99745cf3610 orderPrio=HIGH
+11:28:48.160 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [Info SUR la Ligne a traiter] - qty=60
+11:28:48.160 [orderReceivedTestListener-0-C-1] WARN  c.s.m.allocation.AllocationService - [] [ALLOC] Allocation —  allocated=60  orderId=5ee245d0-04df-4a3f-9365-c99745cf3610 orderPrio=HIGH
+11:28:48.165 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [36m[ALLOCSTART][0m ALLOCATION 5ee245d0-04df-4a3f-9365-c99745cf3610 événement(s)
+11:28:48.169 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [36m[ALLOC] [0m Allocation succeed—  lines=2
+11:28:48.170 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [CHECHLINEIDIDIDIDDDDDDDDDDDDDDDDDDDDD]Ordre JUSTE APRÈS readValue (outbox): [PROD01, PROD02]
+11:28:48.170 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] start order process
+11:28:48.170 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [Info SUR la Ligne a traiter] - qty=60
+11:28:48.170 [orderReceivedTestListener-0-C-1] WARN  c.s.m.allocation.AllocationService - [] [ALLOC] Allocation —  allocated=50  orderId=53d1baef-1c93-46f8-8eb2-068494923133 orderPrio=HIGH
+11:28:48.170 [orderReceivedTestListener-0-C-1] WARN  c.s.m.allocation.AllocationService - [] [ALLOC] Partial — orderId=53d1baef-1c93-46f8-8eb2-068494923133 sku=1c5d96a5-ba88-4cc5-8277-fcb2e541d7c4 needed=60 got=50 orderPriority=HIGH
+11:28:48.171 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [Info SUR la Ligne a traiter] - qty=40
+11:28:48.171 [orderReceivedTestListener-0-C-1] WARN  c.s.m.allocation.AllocationService - [] [ALLOC] Allocation —  allocated=20  orderId=53d1baef-1c93-46f8-8eb2-068494923133 orderPrio=HIGH
+11:28:48.171 [orderReceivedTestListener-0-C-1] WARN  c.s.m.allocation.AllocationService - [] [ALLOC] Partial — orderId=53d1baef-1c93-46f8-8eb2-068494923133 sku=433bb77e-4867-497d-9ee3-7cd54cb9f299 needed=40 got=20 orderPriority=HIGH
+11:28:48.176 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [36m[ALLOCSTART][0m ALLOCATION 53d1baef-1c93-46f8-8eb2-068494923133 événement(s)
+11:28:48.184 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [36m[ALLOC] [0m Allocation succeed—  lines=4
+11:28:48.184 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [CHECHLINEIDIDIDIDDDDDDDDDDDDDDDDDDDDD]Ordre JUSTE APRÈS readValue (outbox): [PROD01, PROD02]
+11:28:48.184 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] start order process
+11:28:48.184 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] change status complete delevryry equals true
+11:28:48.231 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [CHECHLINEIDIDIDIDDDDDDDDDDDDDDDDDDDDD]Ordre JUSTE APRÈS readValue (outbox): [PROD01, PROD02]
+11:28:48.231 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] start order process
+11:28:48.231 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] change status complete delevryry equals true
+11:28:48.241 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] fin...................................................................................................
+11:28:54.225 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] start order allocation- aalo=42e6b18e-bef4-4640-91f2-5dec7fffd54d, name=PROD01, size=5
+11:28:54.233 [orderReceivedTestListener-0-C-1] WARN  c.s.m.allocation.AllocationService - [] [SKU verfügbar ]- skusSize=2
+11:28:54.233 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [ALLOC SKU size]- sku=2
+11:28:54.234 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [CHECHLINEIDIDIDIDDDDDDDDDDDDDDDDDDDDD]Ordre JUSTE APRÈS readValue (outbox): [PROD01, PROD02]
+11:28:54.234 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] start order process
+11:28:54.234 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [Info SUR la Ligne a traiter] - qty=40
+11:28:54.234 [orderReceivedTestListener-0-C-1] WARN  c.s.m.allocation.AllocationService - [] [ALLOC] Allocation —  allocated=40  orderId=42e6b18e-bef4-4640-91f2-5dec7fffd54d orderPrio=HIGH
+11:28:54.235 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [Info SUR la Ligne a traiter] - qty=60
+11:28:54.235 [orderReceivedTestListener-0-C-1] WARN  c.s.m.allocation.AllocationService - [] [ALLOC] Allocation —  allocated=60  orderId=42e6b18e-bef4-4640-91f2-5dec7fffd54d orderPrio=HIGH
+11:28:54.240 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [36m[ALLOCSTART][0m ALLOCATION 42e6b18e-bef4-4640-91f2-5dec7fffd54d événement(s)
+11:28:54.244 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [36m[ALLOC] [0m Allocation succeed—  lines=2
+11:28:54.244 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [CHECHLINEIDIDIDIDDDDDDDDDDDDDDDDDDDDD]Ordre JUSTE APRÈS readValue (outbox): [PROD01, PROD02]
+11:28:54.244 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] start order process
+11:28:54.245 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [Info SUR la Ligne a traiter] - qty=80
+11:28:54.245 [orderReceivedTestListener-0-C-1] WARN  c.s.m.allocation.AllocationService - [] [ALLOC] Allocation —  allocated=50  orderId=a35c612d-e0a3-4c03-964c-f872a95832a5 orderPrio=HIGH
+11:28:54.245 [orderReceivedTestListener-0-C-1] WARN  c.s.m.allocation.AllocationService - [] [ALLOC] Allocation —  allocated=30  orderId=a35c612d-e0a3-4c03-964c-f872a95832a5 orderPrio=HIGH
+11:28:54.245 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [Info SUR la Ligne a traiter] - qty=50
+11:28:54.245 [orderReceivedTestListener-0-C-1] WARN  c.s.m.allocation.AllocationService - [] [ALLOC] Allocation —  allocated=20  orderId=a35c612d-e0a3-4c03-964c-f872a95832a5 orderPrio=HIGH
+11:28:54.245 [orderReceivedTestListener-0-C-1] WARN  c.s.m.allocation.AllocationService - [] [ALLOC] Partial — orderId=a35c612d-e0a3-4c03-964c-f872a95832a5 sku=51de4a22-e802-459c-babf-88a6bc3a985d needed=50 got=20 orderPriority=HIGH
+11:28:54.250 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [36m[ALLOCSTART][0m ALLOCATION a35c612d-e0a3-4c03-964c-f872a95832a5 événement(s)
+11:28:54.256 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [36m[ALLOC] [0m Allocation succeed—  lines=4
+11:28:54.257 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [CHECHLINEIDIDIDIDDDDDDDDDDDDDDDDDDDDD]Ordre JUSTE APRÈS readValue (outbox): [PROD01, PROD02]
+11:28:54.257 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] start order process
+11:28:54.257 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [Info SUR la Ligne a traiter] - qty=60
+11:28:54.257 [orderReceivedTestListener-0-C-1] WARN  c.s.m.allocation.AllocationService - [] [ALLOC] Allocation —  allocated=40  orderId=801ff4f4-0424-4a81-909f-83ec93a62bd3 orderPrio=HIGH
+11:28:54.258 [orderReceivedTestListener-0-C-1] WARN  c.s.m.allocation.AllocationService - [] [ALLOC] Partial — orderId=801ff4f4-0424-4a81-909f-83ec93a62bd3 sku=1997a2ba-7ac6-4d4e-946e-e2f03519bd12 needed=60 got=40 orderPriority=HIGH
+11:28:54.258 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [Info SUR la Ligne a traiter] - qty=40
+11:28:54.258 [orderReceivedTestListener-0-C-1] WARN  c.s.m.allocation.AllocationService - [] aucune allocation dispo
+11:28:54.261 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [36m[ALLOCSTART][0m ALLOCATION 801ff4f4-0424-4a81-909f-83ec93a62bd3 événement(s)
+11:28:54.264 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [36m[ALLOC] [0m Allocation succeed—  lines=2
+11:28:54.264 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [CHECHLINEIDIDIDIDDDDDDDDDDDDDDDDDDDDD]Ordre JUSTE APRÈS readValue (outbox): [PROD01, PROD02]
+11:28:54.264 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] start order process
+11:28:54.265 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] change status complete delevryry equals true
+11:28:54.292 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] [CHECHLINEIDIDIDIDDDDDDDDDDDDDDDDDDDDD]Ordre JUSTE APRÈS readValue (outbox): [PROD01, PROD02]
+11:28:54.292 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] start order process
+11:28:54.292 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] change status complete delevryry equals true
+11:28:54.299 [orderReceivedTestListener-0-C-1] INFO  c.s.m.allocation.AllocationService - [] fin...................................................................................................

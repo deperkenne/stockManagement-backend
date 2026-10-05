@@ -113,10 +113,11 @@ public class SkuService {
 			return Map.of();
 		}
 
+		//log.info("[sku-code]- skucode={}",skuCodes.getFirst());
 
 		// Verrouillage pessimiste en BDD
 		List<Sku> allSkus = skuRepository.findAvailableSkusForAllocationWithLock(skuCodes);
-        log.info("[Sku size]- skusize={}",allSkus.size());
+        log.info("[taille du sku a chercher]- skusize={}",allSkus.size());
 		// Regroupement par ProductNr
 		return allSkus.stream()
 			.collect(Collectors.groupingBy(s -> s.getProductNr().getValue()));

@@ -54,7 +54,7 @@ public class AllocationService {
 	@Transactional
 	public void allocate(List<OrderReceivedEvent> events) {
 
-		log.info("start order allocation- aalo={}, name={}", events.get(0).getOrderId(),events.getFirst().getLines().getFirst().getSku().toString());
+		log.info("start order allocation- aalo={}, name={}, size={}", events.get(0).getOrderId(),events.getFirst().getLines().getFirst().getSku().toString(),events.size());
 
 		if(events.isEmpty()){
 			log.warn("aucun order diponible................ ");
@@ -73,19 +73,26 @@ public class AllocationService {
 		List<UUID> batchOrderUuidIds = events.stream()
 			.map(event -> UUID.fromString(event.getOrderId())) // 👈 Conversion String -> UUID
 			.toList();
-		Set<UUID> alreadyAllocatedIds = new HashSet<>(
-			allocationItemService.findAlreadyAllocatedOrderIds(batchOrderUuidIds)
-		);
+		//Set<UUID> alreadyAllocatedIds = new HashSet<>(
+		//	allocationItemService.findAlreadyAllocatedOrderIds(batchOrderUuidIds)
+		//);
 
 		// Filtrage en RAM (nanosecondes) : conserve uniquement les nouvelles commandes
-		List<OrderReceivedEvent> filtedEventsToProcess = OrderReceivedEvent.newEventsToProcess(events,alreadyAllocatedIds);
+		//List<OrderReceivedEvent> filtedEventsToProcess = OrderReceivedEvent.newEventsToProcess(events,alreadyAllocatedIds);
 
 		//  Ordonnancement des commandes selon les règles métier (Délégué)
 		List<OrderReceivedEvent> prioritizedEvents = OrderReceivedEvent.sortByPriority(events);
+
 		for (OrderReceivedEvent event : prioritizedEvents) {
-			log.info("order-information - orderPriority={} ", event.getPriority());
+			log.info("[CHECHLINEIDIDIDIDDDDDDDDDDDDDDDDDDDDD]Ordre JUSTE APRÈS readValue (outbox): {}",
+				event.getLines().stream()
+					.map(OrderReceivedEvent.OrderLine::getSku)
+					.toList());
+
 			processOrder(event, stockMap);
 		}
+
+		log.info("fin...................................................................................................");
 	}
 
 
@@ -141,8 +148,11 @@ public class AllocationService {
 		int partialLines = 0;
 
 		// Parcours et traitement des lignes
+		// 1. On extrait et on trie les lignes par orderLineItemId avant de traiter
 
+        //List<OrderReceivedEvent.OrderLine> lineItems = event.getLines();
 		for (OrderReceivedEvent.OrderLine line : event.getLines()) {
+			log.info("[Info SUR la Ligne a traiter] - qty={}",line.getQuantity());
 			String productNrStr = line.getSku();
 			int requestedQty = line.getQuantity();
 			UUID lineIdUuid = UUID.fromString(line.getOrderLineItemId());

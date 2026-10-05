@@ -39,6 +39,14 @@ public class KafkaEventHandler {
         log.info("[HANDLER] order.received batch size={}", orderReceivedEvents.size());
 		// before we start the process allocation we need to send a message
 		// to order to change the order status
+		// ← AJOUTE CE BLOC ICI, avant tout traitement
+		orderReceivedEvents.forEach(event ->
+			log.info("[ORDER-LINES-CHECKHANDLERBACHHHHHHH] orderId={} lines={}",
+				event.getOrderId(),
+				event.getLines().stream()
+					.map(OrderReceivedEvent.OrderLine::getSku)
+					.toList())
+		);
         allocationService.allocate(orderReceivedEvents);
     }
 

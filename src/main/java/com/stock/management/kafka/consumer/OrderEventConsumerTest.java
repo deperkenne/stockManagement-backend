@@ -48,6 +48,15 @@ public class OrderEventConsumerTest {
 		log.info("[KAFKA] Received batch of {} orders — first: topic={} partition={} offset={}",
 			orderReceivedEvents.size(), topics.get(0), partitions.get(0), offsets.get(0));
 		try {
+
+			// ← AJOUTE CE BLOC ICI, avant tout traitement
+			orderReceivedEvents.forEach(event ->
+				log.info("[ORDER-LINES-CHECK] orderId={} lines={}",
+					event.getOrderId(),
+					event.getLines().stream()
+						.map(OrderReceivedEvent.OrderLine::getSku)
+						.toList())
+			);
 			// 1. Tentative sur le lot complet (Batch)
 			eventHandler.handleOrderReceivedBatch(orderReceivedEvents);
 			log.info("commit sucessfull...................");

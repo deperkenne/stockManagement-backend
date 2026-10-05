@@ -71,6 +71,11 @@ public class OutboxPublisher {
 				OrderReceivedEvent.class
 			);
 
+			log.info("Ordre JUSTE APRÈS readValue (outbox): {}",
+				orderReceivedEvent.getLines().stream()
+					.map(OrderReceivedEvent.OrderLine::getSku)
+					.toList());
+
 			byte[] serialized = objectMapper.writeValueAsBytes(orderReceivedEvent);
 			log.info("[KAFKA-SIZE] Taille du message sérialisé : {} octets", serialized.length);
 

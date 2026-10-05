@@ -1,0 +1,109 @@
+11:28:43.409 [main] INFO  c.s.m.a.AllocationRetryService - [] [RETRY-SERVICE] Début du rejeu pour 1 produit(s).
+11:28:43.410 [main] INFO  c.s.m.a.AllocationRetryService - [] [34m[FINDPRODUCT] getDATA TO REPO[0m
+11:28:43.419 [main] INFO  c.s.m.a.AllocationRetryService - [] [LISTORDERSIZE]- orderSize=1
+11:28:43.420 [main] INFO  c.s.m.a.AllocationRetryService - [] [RETRY] 1 ALLOCATION_FAILED orders eligible for full replay
+11:28:43.423 [main] INFO  c.s.m.a.AllocationRetryService - [] [34m[CALL-ALLOCATION-SERVICE]  1  start retry process[0m
+11:28:43.428 [main] INFO  c.s.m.a.AllocationRetryService - [] [orderToWithNOTALLOCATEDretry]- size=1
+11:28:43.429 [main] INFO  c.s.m.a.AllocationRetryService - [] start order allocation- aalo=803dfc25-5052-4c87-8ef6-bc55736097ee, name=PROD02, size=1
+11:28:43.438 [main] WARN  c.s.m.a.AllocationRetryService - [] [SKU verfügbar ]- skusSize=1
+11:28:43.439 [main] INFO  c.s.m.a.AllocationRetryService - [] [ALLOC SKU size]- sku=1
+11:28:43.440 [main] INFO  c.s.m.a.AllocationRetryService - [] [CHECHLINEIDIDIDIDDDDDDDDDDDDDDDDDDDDD]Ordre JUSTE APRÈS readValue (outbox): [PROD02]
+11:28:43.440 [main] INFO  c.s.m.a.AllocationRetryService - [] start order process
+11:28:43.440 [main] INFO  c.s.m.a.AllocationRetryService - [] [Info SUR la Ligne a traiter] - qty=60
+11:28:43.441 [main] WARN  c.s.m.a.AllocationRetryService - [] [ALLOC] Allocation —  allocated=40  orderId=803dfc25-5052-4c87-8ef6-bc55736097ee orderPrio=LOW
+11:28:43.441 [main] WARN  c.s.m.a.AllocationRetryService - [] [ALLOC] Partial — orderId=803dfc25-5052-4c87-8ef6-bc55736097ee sku=5d125e16-f647-4053-8172-9a7cfb390f0d needed=60 got=40 orderPriority=LOW
+11:28:43.443 [main] INFO  c.s.m.a.AllocationRetryService - [] [36m[ALLOCSTART][0m ALLOCATION 803dfc25-5052-4c87-8ef6-bc55736097ee événement(s)
+11:28:43.449 [main] INFO  c.s.m.a.AllocationRetryService - [] [36m[ALLOC] [0m Allocation succeed—  lines=2
+11:28:43.449 [main] INFO  c.s.m.a.AllocationRetryService - [] fin...................................................................................................
+11:28:43.449 [main] INFO  c.s.m.a.AllocationRetryService - [] allocation sucessfull............................
+11:28:43.449 [main] INFO  c.s.m.a.AllocationRetryService - [] [34m[FINDPRODUCT] getDATA TO REPO[0m
+11:28:43.462 [main] INFO  c.s.m.a.AllocationRetryService - [] [LISTORDERSIZE]- orderSize=0
+11:28:43.462 [main] INFO  c.s.m.a.AllocationRetryService - [] [RETRY] 1 ALLOCATION_FAILED orders eligible for full replay
+11:28:43.463 [main] INFO  c.s.m.a.AllocationRetryService - [] [34m[CALL-ALLOCATION-SERVICE]  0  start retry process[0m
+11:28:43.486 [main] INFO  c.s.m.a.AllocationRetryService - [] [collection] lineSize=1, productNr=PROD02 qty=20
+11:28:43.491 [main] INFO  c.s.m.a.AllocationRetryService - [] [OrderId]- orderId=803dfc25-5052-4c87-8ef6-bc55736097ee
+11:28:43.501 [main] INFO  c.s.m.a.AllocationRetryService - [] [SKU DEPR]: productNr='PROD01', qty=0 tqty=90
+11:28:43.501 [main] INFO  c.s.m.a.AllocationRetryService - [] [SKU DEPR]: productNr='PROD02', qty=0 tqty=80
+11:28:43.502 [main] INFO  c.s.m.a.AllocationRetryService - [] [SKU DEPR]: productNr='PROD03', qty=20 tqty=20
+11:28:43.502 [main] WARN  c.s.m.a.AllocationRetryService - [] [productnrs list]- productnrs=PROD02
+11:28:43.512 [main] INFO  c.s.m.a.AllocationRetryService - [] [SKusAvailable]- skuSize=0
+11:28:43.512 [main] INFO  c.s.m.a.AllocationRetryService - [] Skus not available for this products
+11:28:43.512 [main] INFO  c.s.m.a.AllocationRetryService - [] [RETRY-BATCH] 1 commande(s) traitée(s), 1 ligne(s) rejouée(s)
+11:28:49.160 [main] INFO  c.s.m.a.AllocationRetryService - [] [RETRY-SERVICE] Début du rejeu pour 2 produit(s).
+11:28:49.160 [main] INFO  c.s.m.a.AllocationRetryService - [] [34m[FINDPRODUCT] getDATA TO REPO[0m
+11:28:49.168 [main] INFO  c.s.m.a.AllocationRetryService - [] [LISTORDERSIZE]- orderSize=2
+11:28:49.168 [main] INFO  c.s.m.a.AllocationRetryService - [] [RETRY] 2 ALLOCATION_FAILED orders eligible for full replay
+11:28:49.168 [main] INFO  c.s.m.a.AllocationRetryService - [] [34m[CALL-ALLOCATION-SERVICE]  2  start retry process[0m
+11:28:49.168 [main] INFO  c.s.m.a.AllocationRetryService - [] [orderToWithNOTALLOCATEDretry]- size=2
+11:28:49.169 [main] INFO  c.s.m.a.AllocationRetryService - [] start order allocation- aalo=4ebcda06-a76b-4204-a6ab-2f0798df5a3b, name=PROD02, size=2
+11:28:49.178 [main] WARN  c.s.m.a.AllocationRetryService - [] [SKU verfügbar ]- skusSize=2
+11:28:49.178 [main] INFO  c.s.m.a.AllocationRetryService - [] [ALLOC SKU size]- sku=2
+11:28:49.178 [main] INFO  c.s.m.a.AllocationRetryService - [] [CHECHLINEIDIDIDIDDDDDDDDDDDDDDDDDDDDD]Ordre JUSTE APRÈS readValue (outbox): [PROD01, PROD02]
+11:28:49.179 [main] INFO  c.s.m.a.AllocationRetryService - [] start order process
+11:28:49.180 [main] INFO  c.s.m.a.AllocationRetryService - [] [Info SUR la Ligne a traiter] - qty=50
+11:28:49.180 [main] WARN  c.s.m.a.AllocationRetryService - [] [ALLOC] Allocation —  allocated=50  orderId=a8644a26-b6ea-4787-a8a3-6b7daaea3db9 orderPrio=NORMAL
+11:28:49.181 [main] INFO  c.s.m.a.AllocationRetryService - [] [Info SUR la Ligne a traiter] - qty=20
+11:28:49.181 [main] WARN  c.s.m.a.AllocationRetryService - [] [ALLOC] Allocation —  allocated=20  orderId=a8644a26-b6ea-4787-a8a3-6b7daaea3db9 orderPrio=NORMAL
+11:28:49.182 [main] INFO  c.s.m.a.AllocationRetryService - [] [36m[ALLOCSTART][0m ALLOCATION a8644a26-b6ea-4787-a8a3-6b7daaea3db9 événement(s)
+11:28:49.186 [main] INFO  c.s.m.a.AllocationRetryService - [] [36m[ALLOC] [0m Allocation succeed—  lines=2
+11:28:49.186 [main] INFO  c.s.m.a.AllocationRetryService - [] [CHECHLINEIDIDIDIDDDDDDDDDDDDDDDDDDDDD]Ordre JUSTE APRÈS readValue (outbox): [PROD02, PROD01]
+11:28:49.186 [main] INFO  c.s.m.a.AllocationRetryService - [] start order process
+11:28:49.186 [main] INFO  c.s.m.a.AllocationRetryService - [] change status complete delevryry equals true
+11:28:49.201 [main] INFO  c.s.m.a.AllocationRetryService - [] fin...................................................................................................
+11:28:49.201 [main] INFO  c.s.m.a.AllocationRetryService - [] allocation sucessfull............................
+11:28:49.202 [main] INFO  c.s.m.a.AllocationRetryService - [] [34m[FINDPRODUCT] getDATA TO REPO[0m
+11:28:49.210 [main] INFO  c.s.m.a.AllocationRetryService - [] [LISTORDERSIZE]- orderSize=1
+11:28:49.211 [main] INFO  c.s.m.a.AllocationRetryService - [] [RETRY] 1 ALLOCATION_FAILED orders eligible for full replay
+11:28:49.211 [main] INFO  c.s.m.a.AllocationRetryService - [] [34m[CALL-ALLOCATION-SERVICE]  1  start retry process[0m
+11:28:49.211 [main] INFO  c.s.m.a.AllocationRetryService - [] [orderToWithNOTALLOCATEDretry]- size=1
+11:28:49.211 [main] INFO  c.s.m.a.AllocationRetryService - [] start order allocation- aalo=4ebcda06-a76b-4204-a6ab-2f0798df5a3b, name=PROD02, size=1
+11:28:49.218 [main] WARN  c.s.m.a.AllocationRetryService - [] [SKU verfügbar ]- skusSize=0
+11:28:49.218 [main] WARN  c.s.m.a.AllocationRetryService - [] aucun sku disponible................ 
+11:28:49.218 [main] INFO  c.s.m.a.AllocationRetryService - [] allocation sucessfull............................
+11:28:49.231 [main] INFO  c.s.m.a.AllocationRetryService - [] [collection] lineSize=2, productNr=PROD02 qty=20
+11:28:49.241 [main] INFO  c.s.m.a.AllocationRetryService - [] [OrderId]- orderId=4ebcda06-a76b-4204-a6ab-2f0798df5a3b
+11:28:49.246 [main] INFO  c.s.m.a.AllocationRetryService - [] [SKU DEPR]: productNr='PROD01', qty=0 tqty=90
+11:28:49.246 [main] INFO  c.s.m.a.AllocationRetryService - [] [SKU DEPR]: productNr='PROD02', qty=0 tqty=80
+11:28:49.246 [main] INFO  c.s.m.a.AllocationRetryService - [] [SKU DEPR]: productNr='PROD03', qty=20 tqty=20
+11:28:49.247 [main] WARN  c.s.m.a.AllocationRetryService - [] [productnrs list]- productnrs=PROD02
+11:28:49.252 [main] INFO  c.s.m.a.AllocationRetryService - [] [SKusAvailable]- skuSize=0
+11:28:49.253 [main] INFO  c.s.m.a.AllocationRetryService - [] Skus not available for this products
+11:28:49.253 [main] INFO  c.s.m.a.AllocationRetryService - [] [RETRY-BATCH] 1 commande(s) traitée(s), 2 ligne(s) rejouée(s)
+11:28:55.409 [main] INFO  c.s.m.a.AllocationRetryService - [] [RETRY-SERVICE] Début du rejeu pour 1 produit(s).
+11:28:55.410 [main] INFO  c.s.m.a.AllocationRetryService - [] [34m[FINDPRODUCT] getDATA TO REPO[0m
+11:28:55.419 [main] INFO  c.s.m.a.AllocationRetryService - [] [LISTORDERSIZE]- orderSize=2
+11:28:55.419 [main] INFO  c.s.m.a.AllocationRetryService - [] [RETRY] 3 ALLOCATION_FAILED orders eligible for full replay
+11:28:55.420 [main] INFO  c.s.m.a.AllocationRetryService - [] [34m[CALL-ALLOCATION-SERVICE]  2  start retry process[0m
+11:28:55.420 [main] INFO  c.s.m.a.AllocationRetryService - [] [orderToWithNOTALLOCATEDretry]- size=2
+11:28:55.420 [main] INFO  c.s.m.a.AllocationRetryService - [] start order allocation- aalo=373d658c-478d-4eb8-b9ff-03aa18e6fce4, name=PROD01, size=2
+11:28:55.426 [main] WARN  c.s.m.a.AllocationRetryService - [] [SKU verfügbar ]- skusSize=1
+11:28:55.427 [main] INFO  c.s.m.a.AllocationRetryService - [] [ALLOC SKU size]- sku=1
+11:28:55.427 [main] INFO  c.s.m.a.AllocationRetryService - [] [CHECHLINEIDIDIDIDDDDDDDDDDDDDDDDDDDDD]Ordre JUSTE APRÈS readValue (outbox): [PROD01]
+11:28:55.427 [main] INFO  c.s.m.a.AllocationRetryService - [] start order process
+11:28:55.427 [main] INFO  c.s.m.a.AllocationRetryService - [] change status complete delevryry equals true
+11:28:55.430 [main] INFO  c.s.m.a.AllocationRetryService - [] [CHECHLINEIDIDIDIDDDDDDDDDDDDDDDDDDDDD]Ordre JUSTE APRÈS readValue (outbox): [PROD01]
+11:28:55.430 [main] INFO  c.s.m.a.AllocationRetryService - [] start order process
+11:28:55.430 [main] INFO  c.s.m.a.AllocationRetryService - [] [Info SUR la Ligne a traiter] - qty=40
+11:28:55.430 [main] WARN  c.s.m.a.AllocationRetryService - [] [ALLOC] Allocation —  allocated=40  orderId=373d658c-478d-4eb8-b9ff-03aa18e6fce4 orderPrio=LOW
+11:28:55.432 [main] INFO  c.s.m.a.AllocationRetryService - [] [36m[ALLOCSTART][0m ALLOCATION 373d658c-478d-4eb8-b9ff-03aa18e6fce4 événement(s)
+11:28:55.436 [main] INFO  c.s.m.a.AllocationRetryService - [] [36m[ALLOC] [0m Allocation succeed—  lines=1
+11:28:55.437 [main] INFO  c.s.m.a.AllocationRetryService - [] fin...................................................................................................
+11:28:55.437 [main] INFO  c.s.m.a.AllocationRetryService - [] allocation sucessfull............................
+11:28:55.437 [main] INFO  c.s.m.a.AllocationRetryService - [] [34m[FINDPRODUCT] getDATA TO REPO[0m
+11:28:55.451 [main] INFO  c.s.m.a.AllocationRetryService - [] [LISTORDERSIZE]- orderSize=1
+11:28:55.452 [main] INFO  c.s.m.a.AllocationRetryService - [] [RETRY] 2 ALLOCATION_FAILED orders eligible for full replay
+11:28:55.452 [main] INFO  c.s.m.a.AllocationRetryService - [] [34m[CALL-ALLOCATION-SERVICE]  1  start retry process[0m
+11:28:55.452 [main] INFO  c.s.m.a.AllocationRetryService - [] [orderToWithNOTALLOCATEDretry]- size=1
+11:28:55.452 [main] INFO  c.s.m.a.AllocationRetryService - [] start order allocation- aalo=b3401523-efa2-4e7f-87dd-a2af4e65703e, name=PROD01, size=1
+11:28:55.459 [main] WARN  c.s.m.a.AllocationRetryService - [] [SKU verfügbar ]- skusSize=0
+11:28:55.459 [main] WARN  c.s.m.a.AllocationRetryService - [] aucun sku disponible................ 
+11:28:55.459 [main] INFO  c.s.m.a.AllocationRetryService - [] allocation sucessfull............................
+11:28:55.469 [main] INFO  c.s.m.a.AllocationRetryService - [] [collection] lineSize=1, productNr=PROD01 qty=50
+11:28:55.473 [main] INFO  c.s.m.a.AllocationRetryService - [] [OrderId]- orderId=b3401523-efa2-4e7f-87dd-a2af4e65703e
+11:28:55.481 [main] INFO  c.s.m.a.AllocationRetryService - [] [SKU DEPR]: productNr='PROD01', qty=0 tqty=90
+11:28:55.481 [main] INFO  c.s.m.a.AllocationRetryService - [] [SKU DEPR]: productNr='PROD02', qty=0 tqty=80
+11:28:55.481 [main] INFO  c.s.m.a.AllocationRetryService - [] [SKU DEPR]: productNr='PROD01', qty=0 tqty=70
+11:28:55.481 [main] WARN  c.s.m.a.AllocationRetryService - [] [productnrs list]- productnrs=PROD01
+11:28:55.487 [main] INFO  c.s.m.a.AllocationRetryService - [] [SKusAvailable]- skuSize=0
+11:28:55.487 [main] INFO  c.s.m.a.AllocationRetryService - [] Skus not available for this products
+11:28:55.487 [main] INFO  c.s.m.a.AllocationRetryService - [] [RETRY-BATCH] 1 commande(s) traitée(s), 1 ligne(s) rejouée(s)

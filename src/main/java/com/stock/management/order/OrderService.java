@@ -224,6 +224,9 @@ public class OrderService {
 		if (oldStatus == OrderStatus.PARTIALLY_ALLOCATED) {
 			log.info("[CANCEL] Order {} is PARTIAL. Initiating stock release...", order.getId());
 			allocationItems = releaseStockForPartialOrder(order);
+			if(allocationItems ==  null){
+				return null;
+			}
 			releaseStockAndRetryPending(order, allocationItems);
 		}
 		return new CancelOrderResponse(
@@ -443,14 +446,11 @@ public class OrderService {
 			.build();
 	}
 
-
 	private List<OrderReceivedEvent.OrderLine> fillOrderLines (CustomerOrder order){
-		List<OrderReceivedEvent.OrderLine> lines = order.getLineItems().stream()
-			.map(this::toOrderLine)
-			.toList();
-		  return lines;
+		  return order.getLineItems().stream()
+			  .map(this::toOrderLine)
+			  .toList();
 	}
-
 
 
 	private CustomerOrder createAndPersistOrder(CreateOrderRequest request) {
@@ -474,6 +474,8 @@ public class OrderService {
 
 	private void createAndPersistOrderOutBox(CustomerOrder order){
 		OrderReceivedEvent orderReceivedEvent = buildOrderReceivedEvent(order);
+		log.info("Ordre AVANT sérialisation: {}",
+			orderReceivedEvent.getLines().stream().map(OrderReceivedEvent.OrderLine::getSku).toList());
 		try {
 			OrderOutBox outboxEntry = OrderOutBox.builder()
 				.id(UUID.randomUUID())

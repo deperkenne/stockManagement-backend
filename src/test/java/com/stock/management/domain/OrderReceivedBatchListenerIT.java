@@ -20,6 +20,8 @@ import org.apache.kafka.clients.admin.OffsetSpec;
 import org.apache.kafka.clients.admin.RecordsToDelete;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.domain.Sort;
@@ -32,10 +34,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
+import java.util.*;
 import java.util.concurrent.*;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -270,6 +269,223 @@ public class OrderReceivedBatchListenerIT {
 
 	private void AssertAllocationItemA(List<OrderId> orderIds){
 
+	}
+
+
+
+	private record SkuStock(String productNr, int quantity, String warehouse) {}
+
+	private record OrderLine(String productNr, int quantity) {}
+
+	private record OrderDef(String label, Priority priority, boolean urgent, List<OrderLine> lines) {}
+
+	private record AllocationExpectation(String orderLabel, List<Integer> expectedQuantities) {}
+
+	private record AllocationScenario(
+		String name,
+		List<SkuStock> stock,
+		List<OrderDef> orders,
+		Map<String, OrderStatus> expectedStatusByLabel,
+		List<AllocationExpectation> expectedAllocations,
+
+		String cancelledOrderLabel // nullable si aucune annulation
+	) {
+		@Override public String toString() { return name; }
+	}
+
+	@ParameterizedTest(name = "[{index}] {0}")
+	@MethodSource("allocationScenarios")
+	void allocationRespectsPriority(AllocationScenario scenario) {
+
+		// GIVEN : stock propre à ce scénario
+		skuService.saveSkus(scenario.stock().stream()
+			.map(s -> Sku.create(new ProductNr(s.productNr()), new Quantity(s.quantity()), s.warehouse()))
+			.toList());
+
+		// WHEN : soumission des commandes dans l'ordre défini par le scénario
+		Map<String, String> orderIdByLabel = new LinkedHashMap<>();
+		for (OrderDef def : scenario.orders()) {
+			List<LineItemRequest> items = def.lines().stream()
+				.map(l -> new LineItemRequest(l.productNr(), l.quantity(), new BigDecimal("10.00")))
+				.toList();
+			String orderId = orderService
+				.receiveOrder(new CreateOrderRequest(def.priority(), def.urgent(), "EUR", items))
+				.orderId();
+			orderIdByLabel.put(def.label(), orderId);
+		}
+
+		List<String> orderIds = new ArrayList<>(orderIdByLabel.values());
+
+		// THEN : toutes les commandes sortent de PENDING
+		orderIds.forEach(id ->
+			await()
+				.atMost(15, TimeUnit.SECONDS)
+				.pollInterval(200, TimeUnit.MILLISECONDS)
+				.untilAsserted(() -> {
+					CustomerOrder order = orderRepository.findById(new OrderId(UUID.fromString(id))).orElseThrow();
+					assertThat(order.getStatus()).isIn(
+						OrderStatus.ALLOCATION_FAILED,
+						OrderStatus.FULLY_ALLOCATED,
+						OrderStatus.PARTIALLY_ALLOCATED
+					);
+				})
+		);
+
+		await()
+			.atMost(15, TimeUnit.SECONDS)
+			.pollInterval(200, TimeUnit.MILLISECONDS)
+			.untilAsserted(() ->
+				assertThat(outboxRepository.findAll())
+					.filteredOn(entry -> orderIds.contains(entry.getAggregateId()))
+					.extracting(OrderOutBox::getStatus)
+					.containsOnly(OrderOutBox.OutboxStatus.SENT)
+			);
+
+		if (scenario.cancelledOrderLabel() != null) {
+			orderService.cancelOrder(
+				new OrderId(UUID.fromString(orderIdByLabel.get(scenario.cancelledOrderLabel()))),
+				new CancelOrderRequest("client01", "client request", CancellationSource.CUSTOMER_APP, null)
+			);
+		}
+
+		scenario.expectedStatusByLabel().forEach((label, expectedStatus) -> {
+			CustomerOrder order = orderRepository
+				.findById(new OrderId(UUID.fromString(orderIdByLabel.get(label))))
+				.orElseThrow();
+			assertThat(order.getStatus())
+				.as("statut de %s (orderId=%s)", label, orderIdByLabel.get(label))
+				.isEqualTo(expectedStatus);
+		});
+
+		if (!scenario.expectedAllocations().isEmpty()) {
+			List<UUID> uuids = scenario.expectedAllocations().stream()
+				.map(exp -> UUID.fromString(orderIdByLabel.get(exp.orderLabel())))
+				.toList();
+			Map<UUID, List<AllocationItem>> byOrder = allocationItemRepository
+				.findAlreadyAllocatedOrders(uuids).stream()
+				.collect(Collectors.groupingBy(AllocationItem::getOrderId, Collectors.toCollection(ArrayList::new)));
+
+			for (AllocationExpectation exp : scenario.expectedAllocations()) {
+				UUID id = UUID.fromString(orderIdByLabel.get(exp.orderLabel()));
+				List<Integer> actual = byOrder.getOrDefault(id, List.of()).stream()
+					.map(AllocationItem::getQuantity)
+					.toList();
+				assertThat(actual)
+					.as("quantités allouées pour %s", exp.orderLabel())
+					.isEqualTo(exp.expectedQuantities());
+			}
+		}
+	}
+
+	static Stream<AllocationScenario> allocationScenarios() {
+		return Stream.of(baselineScenario(),priorityShuffleScenario(),priorityScenario());
+		// Ajoute tes propres scénarios ici une fois que tu as vérifié
+		// manuellement (ou via un run exploratoire) le résultat réel —
+		// je ne les invente pas pour éviter de te faire valider un faux calcul.
+	}
+
+	private static AllocationScenario baselineScenario() {
+		return new AllocationScenario(
+			"stock 90/80/20 - 4 commandes mixtes (scénario original)",
+			List.of(
+				new SkuStock("PROD01", 90, "WA-01"),
+				new SkuStock("PROD02", 80, "WA-02"),
+				new SkuStock("PROD03", 20, "WA-03")
+			),
+			List.of(
+				new OrderDef("lowFalse", Priority.LOW, false,
+					List.of(new OrderLine("PROD01", 40), new OrderLine("PROD02", 60))),
+				new OrderDef("highTrue", Priority.HIGH, true,
+					List.of(new OrderLine("PROD01", 50), new OrderLine("PROD02", 20))),
+				new OrderDef("normalTrue", Priority.NORMAL, true,
+					List.of(new OrderLine("PROD01", 40), new OrderLine("PROD02", 20))),
+				new OrderDef("normalFalse", Priority.NORMAL, false,
+					List.of(new OrderLine("PROD01", 60), new OrderLine("PROD02", 40)))
+			),
+			Map.of(
+				"lowFalse", OrderStatus.PARTIALLY_ALLOCATED,
+				"highTrue", OrderStatus.FULLY_ALLOCATED,
+				"normalTrue", OrderStatus.FULLY_ALLOCATED,
+				"normalFalse", OrderStatus.CANCELLED
+			),
+			List.of(
+				new AllocationExpectation("highTrue", List.of(50, 20)),
+				new AllocationExpectation("normalTrue", List.of(40, 20)),
+				new AllocationExpectation("normalFalse", List.of(40))
+			),
+			"normalFalse"
+		);
+	}
+
+	private static AllocationScenario priorityShuffleScenario() {
+		return new AllocationScenario(
+			"stock 90/80/20 - mêmes lignes, priorités changées (order1=HIGH,order2=NORMAL,order3=LOW,order4=HIGH)",
+			List.of(
+				new SkuStock("PROD01", 90, "WA-01"),
+				new SkuStock("PROD02", 80, "WA-02"),
+				new SkuStock("PROD03", 20, "WA-03")
+			),
+			List.of(
+				new OrderDef("order1", Priority.HIGH, false,
+					List.of(new OrderLine("PROD01", 40), new OrderLine("PROD02", 60))),
+				new OrderDef("order2", Priority.NORMAL, true,
+					List.of(new OrderLine("PROD01", 50), new OrderLine("PROD02", 20))),
+				new OrderDef("order3", Priority.LOW, true,
+					List.of(new OrderLine("PROD01", 40), new OrderLine("PROD02", 20))),
+				new OrderDef("order4", Priority.HIGH, false,
+					List.of(new OrderLine("PROD01", 60), new OrderLine("PROD02", 40)))
+			),
+			Map.of(
+				"order1", OrderStatus.FULLY_ALLOCATED,
+				"order2", OrderStatus.FULLY_ALLOCATED,
+				"order3", OrderStatus.ALLOCATION_FAILED,
+				"order4", OrderStatus.CANCELLED
+			),
+			List.of(
+				new AllocationExpectation("order1", List.of(40, 60)),
+				new AllocationExpectation("order2", List.of(50, 20)),
+				new AllocationExpectation("order4", List.of(50, 0, 20, 0))
+			),
+			"order4"
+		);
+	}
+
+
+	private static AllocationScenario priorityScenario() {
+		return new AllocationScenario(
+			"stock 90/80/20 - mêmes lignes, priorités changées (order1=HIGH,order2=NORMAL,order3=LOW,order4=HIGH)",
+			List.of(
+				new SkuStock("PROD01", 90, "WA-01"),
+				new SkuStock("PROD02", 80, "WA-02"),
+				new SkuStock("PROD01", 70, "WA-03")
+			),
+			List.of(
+				new OrderDef("order1", Priority.HIGH, false,
+					List.of(new OrderLine("PROD01", 40), new OrderLine("PROD02", 60))),
+				new OrderDef("order2", Priority.NORMAL, true,
+					List.of(new OrderLine("PROD01", 50), new OrderLine("PROD02", 20))),
+				new OrderDef("order3", Priority.LOW, true,
+					List.of(new OrderLine("PROD01", 40), new OrderLine("PROD02", 20))),
+				new OrderDef("order5", Priority.HIGH, false,
+					List.of(new OrderLine("PROD01", 80), new OrderLine("PROD02", 50))),
+				new OrderDef("order4", Priority.HIGH, false,
+					List.of(new OrderLine("PROD01", 60), new OrderLine("PROD02", 40)))
+			),
+			Map.of(
+				"order1", OrderStatus.FULLY_ALLOCATED,
+				"order2", OrderStatus.FULLY_ALLOCATED,
+				"order3", OrderStatus.ALLOCATION_FAILED,
+				"order4", OrderStatus.CANCELLED,
+				"order5", OrderStatus.PARTIALLY_ALLOCATED
+			),
+			List.of(
+				new AllocationExpectation("order1", List.of(40, 60)),
+				new AllocationExpectation("order2", List.of(50, 20)),
+				new AllocationExpectation("order4", List.of(50, 30, 20, 0)),
+		        new AllocationExpectation("order5", List.of(40, 0, 20))
+			),
+			"order4"
+		);
 	}
 
 }

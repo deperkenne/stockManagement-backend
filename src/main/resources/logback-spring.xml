@@ -38,7 +38,6 @@
     </encoder>
   </appender>
 
-
   <!-- ============================================= -->
   <!-- Appender dédié : Kafka Consumers -->
   <!-- ============================================= -->
@@ -46,6 +45,17 @@
     <file>${user.home}/stock-management-logs/kafka-consumer.log</file>
     <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
       <fileNamePattern>${user.home}/stock-management-logs/kafka-consumer.%d{yyyy-MM-dd}.log</fileNamePattern>
+      <maxHistory>7</maxHistory>
+    </rollingPolicy>
+    <encoder>
+      <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - [%X{correlationId}] %msg%n</pattern>
+    </encoder>
+  </appender>
+
+  <appender name="KAFKA_HANDLER_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+    <file>${user.home}/stock-management-logs/kafka-handler.log</file>
+    <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+      <fileNamePattern>${user.home}/stock-management-logs/kafka-handler.%d{yyyy-MM-dd}.log</fileNamePattern>
       <maxHistory>7</maxHistory>
     </rollingPolicy>
     <encoder>
@@ -79,6 +89,62 @@
     </encoder>
   </appender>
 
+
+
+
+
+
+
+
+  <appender name="ALLOCATION_SERVICE_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+    <file>${user.home}/stock-management-logs/allocation-service.log</file>
+    <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+      <fileNamePattern>${user.home}/stock-management-logs/allocation-service.%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+      <maxFileSize>50MB</maxFileSize>
+      <maxHistory>14</maxHistory>
+      <totalSizeCap>500MB</totalSizeCap>
+    </rollingPolicy>
+    <encoder>
+      <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - [%X{traceId}] %msg%n</pattern>
+    </encoder>
+  </appender>
+
+  <appender name="ALLOCATION_RETRY_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+    <file>${user.home}/stock-management-logs/allocation-retry-service.log</file>
+    <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+      <fileNamePattern>${user.home}/stock-management-logs/allocation-retry-service.%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+      <maxFileSize>50MB</maxFileSize>
+      <maxHistory>14</maxHistory>
+      <totalSizeCap>500MB</totalSizeCap>
+    </rollingPolicy>
+    <encoder>
+      <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - [%X{traceId}] %msg%n</pattern>
+    </encoder>
+  </appender>
+
+  <!-- Logger spécifique : AllocationService -->
+  <!-- additivity="false" = n'envoie PAS aussi vers le logger racine (pas de doublon console) -->
+  <logger name="com.stock.management.allocation.AllocationService"
+          level="INFO"
+          additivity="false">
+    <appender-ref ref="ALLOCATION_SERVICE_FILE"/>
+    <appender-ref ref="CONSOLE"/>
+  </logger>
+
+  <!-- Logger spécifique : AllocationRetryService -->
+  <logger name="com.stock.management.allocation.AllocationRetryService"
+          level="INFO"
+          additivity="false">
+    <appender-ref ref="ALLOCATION_RETRY_FILE"/>
+    <appender-ref ref="CONSOLE"/>
+  </logger>
+
+
+
+
+
+
+
   <!-- ============================================= -->
   <!-- Loggers par package -->
   <!-- ============================================= -->
@@ -89,12 +155,17 @@
     <appender-ref ref="CONSOLE"/>
   </logger>
 
+  <logger name="com.stock.management.kafka.handler" level="DEBUG" additivity="false">
+    <appender-ref ref="KAFKA_HANDLER_FILE"/>
+    <appender-ref ref="CONSOLE"/>
+  </logger>
+
   <logger name="com.stock.management.sku" level="DEBUG" additivity="false">
     <appender-ref ref="SKU_FILE"/>
     <appender-ref ref="CONSOLE"/>
   </logger>
 
-  <logger name="com.stock.management.order" level="DEBUG" additivity="false">
+  <logger name="com.stock.management.order.OrderService" level="DEBUG" additivity="false">
     <appender-ref ref="ORDER_FILE"/>
     <appender-ref ref="CONSOLE"/>
   </logger>
@@ -107,7 +178,7 @@
   </logger>
 
   <!-- Kafka Producer (si applicable) -->
-  <logger name="com.stock.management.kafka.producer.KafkaEventPublisher" level="DEBUG" additivity="false">
+  <logger name="com.stock.management.kafka.producer" level="DEBUG" additivity="false">
     <appender-ref ref="KAFKA_PRODUCER_FILE"/>
     <appender-ref ref="CONSOLE"/>
   </logger>
