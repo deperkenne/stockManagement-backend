@@ -70,9 +70,10 @@ jobs:
         
       - name: Démarrer la nouvelle version
         run: |
-           SERVER="$(printf '%s' "$SERVER" | tr -d '[:space:]')"
-           ssh -i ~/.ssh/id_deploy -p 22616 "$SERVER" "cd '$DEPLOY_DIR' && IMAGE='$IMAGE' docker compose -f kafka.yml  pull && IMAGE='$IMAGE' docker compose up -d"
-
+          SERVER="$(printf '%s' "$SERVER" | tr -d '[:space:]')"
+          ssh -i ~/.ssh/id_deploy -p 22616 "$SERVER" \
+            "cd '$DEPLOY_DIR' && export IMAGE='$IMAGE' COMPOSE_FILE=kafka.yml && docker compose pull && docker compose up -d --remove-orphans"
+           
       - name: Retirer l'accès au registre du serveur
         if: always()
         run: |
