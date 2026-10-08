@@ -473,16 +473,21 @@ public class OrderReceivedBatchListenerIT {
 			),
 			Map.of(
 				"order1", OrderStatus.FULLY_ALLOCATED,
-				"order2", OrderStatus.FULLY_ALLOCATED,
+				// order2 demande 50 PROD01 ; l'annulation d'order4 ne libère que 40 (seule quantité
+				// qu'order4 avait réellement réservée sur PROD01) -> toujours insuffisant, reste en échec.
+				"order2", OrderStatus.ALLOCATION_FAILED,
 				"order3", OrderStatus.ALLOCATION_FAILED,
 				"order4", OrderStatus.CANCELLED,
 				"order5", OrderStatus.PARTIALLY_ALLOCATED
 			),
 			List.of(
 				new AllocationExpectation("order1", List.of(40, 60)),
-				new AllocationExpectation("order2", List.of(50, 20)),
-				new AllocationExpectation("order4", List.of(50, 30, 20, 0)),
-		        new AllocationExpectation("order5", List.of(40, 0, 20))
+				// order4 n'avait réservé que 40 PROD01 (ligne PROD02 totalement en échec, sans AllocationItem) ;
+				// l'annulation ne change pas ses AllocationItem existants, juste leur statut (-> CANCELLED).
+				new AllocationExpectation("order4", List.of(40, 0)),
+				// order5 n'est jamais rejoué par le retry d'order4 (il ne porte que du PROD02 en attente,
+				// alors que le produit libéré par order4 est PROD01) : son allocation d'origine reste inchangée.
+				new AllocationExpectation("order5", List.of(50, 30, 20, 0))
 			),
 			"order4"
 		);

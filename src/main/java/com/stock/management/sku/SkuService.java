@@ -55,17 +55,16 @@ public class SkuService {
 	}
 
 	/**
-	 * Regroupe les quantités à libérer par SKU.
-	 * Note : toMap plante si un SKU apparaît plusieurs fois dans allocationItems.
-	 * Si des doublons sont possibles, remplacer par Collectors.groupingBy +
-	 * Collectors.summingInt pour cumuler les quantités au lieu d'écraser.
+	 * Regroupe et additionne les quantités à libérer par SKU.
+	 * Un même SKU peut apparaître plusieurs fois (ex : allocation initiale puis retry
+	 * sur le même emplacement) : les quantités sont cumulées, jamais écrasées.
 	 */
 	private Map<UUID, Integer> groupQuantityToReleaseBySku(List<AllocationItem> allocationItems) {
 		return allocationItems.stream()
 			.filter(item -> item.getSkuId() != null)
-			.collect(Collectors.toMap(
+			.collect(Collectors.groupingBy(
 				AllocationItem::getSkuId,
-				AllocationItem::getQuantity
+				Collectors.summingInt(AllocationItem::getQuantity)
 			));
 	}
 

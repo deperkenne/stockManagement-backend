@@ -1,19 +1,29 @@
 spring:
+  config:
+    import: optional:file:.env[.properties]
+  application:
+    name: order-management-service
 
-  logging:
-    # Emplacement et nom du fichier de log sur votre lecteur Z:
-    file:
-      name: C:/temp/app-logs/fintech-app-test.log
-    level:
-      # Affiche le moment exact où la transaction est marquée rollback-only et par qui
-      org.springframework.transaction: DEBUG
-      # Affiche les requêtes SQL et les erreurs Hibernate
-      org.hibernate.SQL: DEBUG
-      org.hibernate.orm.deprecation: ERROR
-    logback:
-      # Rotation des fichiers : taille max de 10 Mo par fichier, conservation sur 30 jours
-      rolling policy.max-file-size=10MB
-      rolling policy.max-history=30
+  # Connexion au PostgreSQL de test lancé via Docker Compose.
+  # Aucun identifiant en dur : DB_HOST/DB_PORT ont des valeurs par défaut de convenance
+  # (topologie locale, pas des secrets) ; POSTGRES_USER/POSTGRES_PASSWORD/POSTGRES_DB
+  # n'ont PAS de valeur par défaut — leur absence doit faire échouer le démarrage
+  # plutôt que de se connecter silencieusement à une mauvaise base.
+  datasource:
+    url: jdbc:postgresql://${POSTGRES_DB_HOST}:${DB_PORT:5440}/${POSTGRES_DB_TEST}
+    username: ${POSTGRES_USER_TEST}
+    password: ${POSTGRES_PASSWORD_TEST}
+
+  jpa:
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+    hibernate:
+      # create-drop : le schéma est créé à l'ouverture du contexte Spring et supprimé
+      # à sa fermeture (fin du run de tests / shutdown hook JVM) -> pas de résidu entre deux runs.
+      ddl-auto: create-drop
+    open-in-view: false
+    properties:
+      hibernate:
+        format_sql: true
 
   kafka:
     bootstrap-servers: ${spring.embedded.kafka.brokers:192.168.178.27:9092}
@@ -49,7 +59,6 @@ spring:
       # de partition, serait silencieusement perdu avec "latest" (jamais relu).
       auto-offset-reset: earliest
 
-
       enable-auto-commit: false
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
@@ -70,3 +79,23 @@ spring:
       concurrency: 1        # 1 seule partition sur le topic de test -> 1 seul thread utile
       poll-timeout: 1000    # poll plus court pour accélérer les tests
       missing-topics-fatal: false
+
+app:
+  kafka:
+    topic:
+      order-received: order.received-test03
+
+logging:
+  # Emplacement et nom du fichier de log sur votre lecteur Z:
+  file:
+    name: C:/temp/app-logs/fintech-app-test.log
+  level:
+    # Affiche le moment exact où la transaction est marquée rollback-only et par qui
+    org.springframework.transaction: DEBUG
+    # Affiche les requêtes SQL et les erreurs Hibernate
+    org.hibernate.SQL: DEBUG
+    org.hibernate.orm.deprecation: ERROR
+  logback:
+    # Rotation des fichiers : taille max de 10 Mo par fichier, conservation sur 30 jours
+    rolling policy.max-file-size=10MB
+    rolling policy.max-history=30

@@ -31,7 +31,7 @@ public interface AllocationItemRepository extends JpaRepository<AllocationItem, 
 	@Query("SELECT a.orderId FROM AllocationItem a WHERE a.orderId IN :orderIds")
 	List<UUID> findAlreadyAllocatedOrderIds(@Param("orderIds") List<UUID> orderIds);
 
-	@Query("SELECT a FROM AllocationItem a WHERE a.orderId IN :orderIds")
+	@Query("SELECT a FROM AllocationItem a WHERE a.orderId IN :orderIds ORDER BY a.id ASC")
 	List<AllocationItem> findAlreadyAllocatedOrders(@Param("orderIds") List<UUID> orderIds);
 	/**
 	 * Récupère toutes les allocations correspondant à la liste d'identifiants de lignes.

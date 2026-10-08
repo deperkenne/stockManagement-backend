@@ -23,7 +23,6 @@ import static com.stock.management.kafka.config.KafkaTopics.DLT_TOPIC;
 @Slf4j
 @Component
 @RequiredArgsConstructor
-@Profile("!test")
 public class OrderEventConsumer {
 
     private final KafkaEventHandler eventHandler;

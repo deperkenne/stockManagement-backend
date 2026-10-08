@@ -77,9 +77,11 @@ public interface OrderRepository extends JpaRepository<CustomerOrder, OrderId> {
      * base de données au lieu de deux (lock puis lazy-load des lignes), et protège contre les mises à jour
      * concurrentes (ex: une allocation en cours sur la même commande). Un seul verrou sur une seule ligne
      * (celle de la commande) : aucun risque de deadlock, il n'y a pas d'ordre de verrouillage à respecter.
+     * Pas de DISTINCT : PostgreSQL refuse "FOR UPDATE" avec DISTINCT, et Hibernate 6
+     * dédoublonne déjà lui-même la commande ramenée par le JOIN FETCH.
      */
-
-    @Query("SELECT DISTINCT o FROM CustomerOrder o LEFT JOIN FETCH o.lineItems WHERE o.id = :id")
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT o FROM CustomerOrder o LEFT JOIN FETCH o.lineItems WHERE o.id = :id")
     Optional<CustomerOrder> findByIdWithLineItemsForUpdate(@Param("id") OrderId id);
 
 	@Query("SELECT DISTINCT o FROM CustomerOrder o LEFT JOIN FETCH o.lineItems " +
@@ -88,8 +90,12 @@ public interface OrderRepository extends JpaRepository<CustomerOrder, OrderId> {
 		@Param("productNrs") List<String> productNrs,
 		@Param("excludedStatuses") List<OrderStatus> excludedStatuses);
 
-	@Query("SELECT DISTINCT o FROM CustomerOrder o LEFT JOIN FETCH o.lineItems li " +
-		"WHERE li.productNr.value IN :productNrs AND o.status NOT IN :excludedStatuses")
+	// Le filtre productNrs doit rester dans un EXISTS séparé : un WHERE sur l'alias
+	// joint (li.productNr...) tronquerait aussi la collection lineItems fetchée,
+	// ne laissant que les lignes du produit filtré au lieu de toutes les lignes de la commande.
+	@Query("SELECT DISTINCT o FROM CustomerOrder o LEFT JOIN FETCH o.lineItems " +
+		"WHERE o.status NOT IN :excludedStatuses " +
+		"AND EXISTS (SELECT 1 FROM LineItem li2 WHERE li2.customerOrder = o AND li2.productNr.value IN :productNrs)")
 	List<CustomerOrder> findModifiableOrderWithLineItem(
 		@Param("productNrs") List<String> productNrs,
 		@Param("excludedStatuses") List<OrderStatus> excludedStatuses);

@@ -82,11 +82,11 @@
           <groupId>org.springframework.boot</groupId>
           <artifactId>spring-boot-h2console</artifactId>
         </dependency>
-		<!--<dependency>
+		<dependency>
 			<groupId>org.postgresql</groupId>
 			<artifactId>postgresql</artifactId>
 			<scope>runtime</scope>
-		</dependency>-->
+		</dependency>
     <!-- Spring Boot Test (Inclus JUnit 5, Mockito, AssertJ, Hamcrest, Spring Test) -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
@@ -179,6 +179,12 @@
 						</configuration>
 					</execution>
 				</executions>
+			</plugin>
+			<!-- Tests d'intégration (*IT) : exécutés par "mvn verify", après les tests unitaires (*Test).
+			     Version et exécutions (integration-test + verify) héritées de spring-boot-starter-parent. -->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-failsafe-plugin</artifactId>
 			</plugin>
 		</plugins>
 	</build>

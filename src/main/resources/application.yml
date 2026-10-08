@@ -19,24 +19,26 @@ logging:
 
 
 spring:
+  config:
+    import: optional:file:.env[.properties]
   application:
     name: management
 
-  h2:
-    console:
-      enabled: true
-      path: /h2-console
-      settings:
-        web-allow-others: true
+  #h2:
+  #  console:
+  #    enabled: true
+  #    path: /h2-console
+  #    settings:
+  #      web-allow-others: true
 
   datasource:
-    url: jdbc:h2:mem:mydb;DB_CLOSE_DELAY=-1
-    driver-class-name: org.h2.Driver
-    username: sa
-    password:
+    url: jdbc:postgresql://${DB_HOST:192.168.178.27}:${DB_PORT:5441}/${POSTGRES_DB_NAME}
+    username: ${POSTGRES_USER}
+    password: ${POSTGRES_PASSWORD}
 
   jpa:
-    database-platform: org.hibernate.dialect.H2Dialect
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+#    database-platform: org.hibernate.dialect.H2Dialect
     hibernate:
       ddl-auto: update        # update = crée les tables si elles n'existent pas, ajoute les colonnes manquantes sans supprimer les données
     open-in-view: false
@@ -49,7 +51,6 @@ spring:
 
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:192.168.178.27:9092}
-
     producer:
       acks: all
       retries: 3
@@ -105,6 +106,11 @@ spring:
           ssl:
             trust: smtp.gmail.com
 
+app:
+  kafka:
+    topic:
+      order-received: order.received
+
 #  security:
 #    oauth2:
 #      resourceserver:
@@ -120,3 +126,13 @@ spring:
       # Doit correspondre exactement au Client ID configuré dans Keycloak
       # (utilisé pour extraire resource_access.{client-id}.roles)
 #      client-id: ${KEYCLOAK_CLIENT_ID:order-management-app}
+
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, metrics, env, loggers # Choisis les endpoints que tu veux exposer
+  endpoint:
+    health:
+      show-details: always # Permet d'avoir le détail de chaque composant (DB, disque, etc.)

@@ -1,0 +1,3 @@
+# Seul le JAR produit par Maven est envoyé à Docker : ni le code source, ni le fichier .env, ni aucun secret
+*
+!target/management-*.jar

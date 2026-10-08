@@ -92,9 +92,12 @@ class OrderServiceTest {
     @Test
     @DisplayName("receiveOrder : chemin nominal — valide, persiste, historise, écrit l'outbox, ne touche pas Kafka directement")
     void receiveOrder_happyPath() throws JsonProcessingException {
+
+		//signal lorsqu'on vas appeler la methode orderRepository quand le SUT serais lancer voila ce qu'on attend
         given(orderRepository.save(any(CustomerOrder.class))).willReturn(savedOrder);
         given(objectMapper.writeValueAsString(any())).willReturn("{}");
 
+		// SUT
         CreateOrderResponse response = orderService.receiveOrder(validRequest);
 
         assertThat(response).isNotNull();

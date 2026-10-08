@@ -1,0 +1,176 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# PIPELINE CI/CD — stock-management
+#
+# En une phrase : à chaque modification de la branche main, l'application est
+# testée, emballée UNE SEULE FOIS dans une image Docker, puis cette même image
+# est livrée successivement en staging, en préproduction et en production.
+#
+#   Tests + image ──► staging ──► préproduction ──► production
+#                                 (approbation)     (approbation)
+#
+# Sur une Pull Request : seulement les tests et la construction de l'image
+# (pour vérifier que tout fonctionne), sans rien publier ni déployer.
+# ─────────────────────────────────────────────────────────────────────────────
+name: CI/CD
+
+on:
+  pull_request:
+    branches: [release]
+  push:
+    branches: [dev]
+
+# Par défaut, le pipeline peut seulement LIRE le code. Chaque étape qui a besoin
+# de plus demande explicitement sa permission ci-dessous.
+permissions:
+  contents: read
+
+# Une Pull Request mise à jour annule sa vérification précédente (devenue inutile).
+# Sur main, rien n'est jamais interrompu : une livraison en cours va jusqu'au bout.
+concurrency:
+  group: ci-cd-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # ÉTAPE 1 — Tester et construire l'image (une seule fois pour tout le pipeline)
+  # ───────────────────────────────────────────────────────────────────────────
+  build:
+    name: Tests et construction de l'image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write          # nécessaire pour publier l'image dans le registre GitHub
+    outputs:
+      # Référence IMMUABLE de l'image (son empreinte sha256) transmise aux déploiements :
+      # staging, préproduction et production reçoivent exactement les mêmes octets.
+      image: ${{ steps.reference.outputs.image }}
+
+    # Base de données et Kafka jetables, démarrés uniquement pour les tests de ce job
+    # puis détruits avec lui. Les identifiants ci-dessous ne protègent que ces
+    # conteneurs éphémères : ce ne sont pas des secrets.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: stock_test
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+        ports:
+          - 5432:5432
+        # Les tests ne démarrent que lorsque la base accepte les connexions
+        options: >-
+          --health-cmd "pg_isready -U ci -d stock_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      kafka:
+        # Image officielle Apache : un seul broker en mode KRaft, joignable sur localhost:9092
+        image: apache/kafka:4.0.0
+        ports:
+          - 9092:9092
+        # Les tests ne démarrent que lorsque le broker répond
+        options: >-
+          --health-cmd "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 10
+
+    steps:
+      - name: Récupérer le code source
+        uses: actions/checkout@v5
+
+      - name: Installer Java 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven           # réutilise les dépendances téléchargées lors des exécutions précédentes
+
+      - name: Lancer les tests et produire le JAR
+        # Pointe l'application vers les conteneurs ci-dessus. Ces variables ont priorité
+        # sur application.yml et application-test.yml : elles valent pour tous les tests,
+        # avec ou sans le profil "test", sans modifier les fichiers de configuration.
+        env:
+          SPRING_DATASOURCE_URL: jdbc:postgresql://localhost:5432/stock_test
+          SPRING_DATASOURCE_USERNAME: ci
+          SPRING_DATASOURCE_PASSWORD: ci
+          SPRING_KAFKA_BOOTSTRAP_SERVERS: localhost:9092
+        run: mvn -B -ntp clean verify
+
+      - name: Calculer le nom de l'image
+        id: name
+        # Le registre exige un nom en minuscules
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Préparer l'outil de construction Docker
+        uses: docker/setup-buildx-action@v3
+
+      - name: Se connecter au registre d'images
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}    # jeton temporaire fourni par GitHub, aucun mot de passe stocké
+
+      - name: Construire l'image (et la publier si on est sur main)
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ github.event_name == 'push' }}
+          # Étiquette lisible par un humain : le commit exact qui a produit l'image
+          tags: ${{ steps.name.outputs.image }}:sha-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Mémoriser la référence immuable de l'image
+        id: reference
+        if: github.event_name == 'push'
+        run: echo "image=${{ steps.name.outputs.image }}@${{ steps.build.outputs.digest }}" >> "$GITHUB_OUTPUT"
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # ÉTAPE 2 — Staging : déploiement automatique dès que l'image est prête
+  # ───────────────────────────────────────────────────────────────────────────
+  staging:
+    name: Staging
+    needs: build
+    if: github.event_name == 'push'
+    permissions:
+      packages: read           # le serveur doit pouvoir télécharger l'image
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: staging
+      image: ${{ needs.build.outputs.image }}
+    secrets: inherit
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # ÉTAPE 3 — Préproduction : uniquement si staging a réussi
+  # ───────────────────────────────────────────────────────────────────────────
+  preproduction:
+    name: Préproduction
+    needs: [build, staging]
+    permissions:
+      packages: read
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: preproduction
+      image: ${{ needs.build.outputs.image }}
+    secrets: inherit
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # ÉTAPE 4 — Production : uniquement si la préproduction a réussi,
+  #           ET après approbation manuelle (règle définie dans l'environnement GitHub « production »)
+  # ───────────────────────────────────────────────────────────────────────────
+  production:
+    name: Production
+    needs: [build, preproduction]
+    permissions:
+      packages: read
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: production
+      image: ${{ needs.build.outputs.image }}
+    secrets: inherit

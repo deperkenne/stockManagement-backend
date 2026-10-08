@@ -92,7 +92,13 @@ public class CustomerOrder {
 
 	 */
 
+    // Sans @OrderBy, Hibernate ne garantit aucun ordre de retour pour cette collection
+    // (surtout visible après un LEFT JOIN FETCH sans ORDER BY, cf. OrderRepository) : deux
+    // relectures de la même commande peuvent renvoyer ses lignes dans un ordre différent.
+    // receivedAt départage dans l'ordre de création ; productNr.value sert de secours
+    // déterministe en cas d'égalité (lignes créées dans la même milliseconde).
     @OneToMany(mappedBy = "customerOrder", cascade = CascadeType.ALL, orphanRemoval = true)
+    @OrderBy("receivedAt ASC, productNr.value ASC")
     private List<LineItem> lineItems = new ArrayList<>();
 
 
@@ -242,8 +248,10 @@ public class CustomerOrder {
 			this.status = OrderStatus.FULLY_ALLOCATED;
 		} else if (partiallyAllocated > 0 || fullyAllocated > 0 ) {
 			this.status = OrderStatus.PARTIALLY_ALLOCATED;
-		} else {
-			this.status = OrderStatus.PENDING; // ou ALLOCATION_FAILED selon tes règles
+		} else if (this.status != OrderStatus.ALLOCATION_FAILED) {
+			// Aucune ligne allouée : une commande ALLOCATION_FAILED (livraison complète refusée)
+			// conserve son statut ; les autres repassent en PENDING
+			this.status = OrderStatus.PENDING;
 		}
 	}
 
@@ -262,6 +270,15 @@ public class CustomerOrder {
 
 		// Lookup O(1) pour les UUIDs demandés
 		Set<UUID> targetUuids = new HashSet<>(requestedUuids);
+
+		// Tout UUID demandé doit appartenir à cette commande : sinon on refuse toute la demande
+		Set<UUID> unknownUuids = new HashSet<>(targetUuids);
+		unknownUuids.removeAll(extractLineItemUuids());
+		if (!unknownUuids.isEmpty()) {
+			throw new LineItemNotFoundException(
+				String.format("Line items %s do not belong to order %s", unknownUuids, this.id.getValue())
+			);
+		}
 
 		return this.lineItems.stream()
 			// 1. La ligne fait-elle partie de la demande ? (O(1))
@@ -305,13 +322,28 @@ public class CustomerOrder {
 			throw new NullPointerException("list item muss not be null");
 		};
 		this.status = OrderStatus.CANCELLED;
+		recordCancellation(cancellationSource, reason, cancelBy);
+		lineItems.stream()
+			.filter(li -> li.getStatus() != LineItemStatus.CANCELLED)
+			.forEach(LineItem::cancel);
+	}
+
+	/**
+	 * Renseigne la traçabilité de l'annulation quand l'annulation de lignes a rendu
+	 * la commande entièrement CANCELLED. Sans effet sinon, et n'écrase jamais une annulation déjà tracée.
+	 */
+	public void recordCancellationIfFullyCancelled(CancellationSource cancellationSource, String reason, String cancelBy) {
+		if (this.status != CANCELLED || this.cancelledAt != null) {
+			return;
+		}
+		recordCancellation(cancellationSource, reason, cancelBy);
+	}
+
+	private void recordCancellation(CancellationSource cancellationSource, String reason, String cancelBy) {
 		this.cancelReason = reason;
 		this.cancelledAt = Instant.now();
 		this.cancellationSource = cancellationSource;
 		this.cancelBy = cancelBy;
-		lineItems.stream()
-			.filter(li -> li.getStatus() != LineItemStatus.CANCELLED)
-			.forEach(LineItem::cancel);
 	}
 
 	private boolean isEmptyOrNull(List<LineItem>lineItems){

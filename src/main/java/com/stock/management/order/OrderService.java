@@ -6,6 +6,7 @@ import com.stock.management.allocation.AllocationReleasedEvent;
 import com.stock.management.allocation.AllocationRetryService;
 import com.stock.management.allocationLine.AllocationItem;
 import com.stock.management.allocationLine.AllocationItemService;
+import com.stock.management.allocationLine.AllocationItemStatus;
 import com.stock.management.kafka.event.OrderReceivedEvent;
 import com.stock.management.kafka.event.StockReleasedEvent;
 import com.stock.management.kafka.producer.KafkaEventPublisher;
@@ -241,6 +242,17 @@ public class OrderService {
 
 	@Transactional
 	public CancelOrderResponse cancelLineItems(UUID orderId, CancelOrderRequest request) {
+		// 0. Validation Fail-Fast (avant tout accès BDD et avant le log qui lit lineItemIds)
+		if (orderId == null) {
+			throw new IllegalArgumentException("OrderId cannot be null.");
+		}
+		if (request == null || request.cancellationSource() == null) {
+			throw new IllegalArgumentException("CancelOrderRequest and cancellationSource are required.");
+		}
+		if (request.lineItemIds() == null || request.lineItemIds().isEmpty()) {
+			throw new IllegalArgumentException("lineItemIds must contain at least one line to cancel.");
+		}
+
 		log.info("[CANCEL] Initiating batch cancellation for orderId={}, lines={}", orderId, request.lineItemIds().size());
 
 		// 1. Lock pessimiste + lignes chargées en un seul aller-retour (évite le lock puis lazy-load séparé)
@@ -269,11 +281,21 @@ public class OrderService {
 		// Récupération et Soft-Delete des allocations associées pour éviter définitivement le rejeu
 		List<UUID> targetUuids = targets.stream().map(LineItemId::getValue).toList();
 
-		List<AllocationItem> allocationsToRelease = allocationItemService.findAllByLineItemIdInAndSkuIdNotNull(targetUuids);
+		// Toutes les allocations actives des lignes annulées : réservées (skuId) ET en attente (WAITING_STOCK).
+		// Les annuler toutes empêche le retry de réallouer du stock à une ligne CANCELLED.
+		// Une allocation déjà CANCELLED a déjà été traitée -> exclue (pas de double libération)
+		List<AllocationItem> activeAllocations = allocationItemService.findAllByLineItemIdIn(targetUuids)
+			.stream()
+			.filter(item -> item.getStatus() != AllocationItemStatus.CANCELLED)
+			.toList();
+
+		// Seules les allocations réservées sur un emplacement portent du stock à rendre
+		List<AllocationItem> allocationsToRelease = activeAllocations.stream()
+			.filter(item -> item.getStatus() == AllocationItemStatus.ALLOCATED && item.getSkuId() != null)
+			.toList();
 
         // 2. Mutation explicite sur le domaine Java
-		// passer le status des allocationItem concerner a False
-		allocationsToRelease.forEach(AllocationItem::cancel);
+		activeAllocations.forEach(AllocationItem::cancel);
 
 
 		/*
@@ -285,10 +307,16 @@ public class OrderService {
 
 		// 6. Recalcul et ajustement du statut global de la commande  si le status est partial
 		order.evaluateAndModifyGlobalStatus();
+		order.recordCancellationIfFullyCancelled(request.cancellationSource(), request.reason(), request.cancelledBy());
 
-		logStatusChangeIfAny(orderId, oldStatus, order.getStatus(), "PARTIAL_CANCEL");
+		String historyReason = order.getStatus() == CANCELLED
+			? "CANCEL:" + request.cancellationSource().name()
+			: "PARTIAL_CANCEL";
+		logStatusChangeIfAny(orderId, oldStatus, order.getStatus(), historyReason);
 
-		if (oldStatus == PARTIALLY_ALLOCATED) {
+		// Libération dès qu'il existe du stock réservé, quel que soit l'ancien statut de la commande :
+		// les allocations viennent d'être annulées, ne pas rendre leur stock le perdrait définitivement
+		if (!allocationsToRelease.isEmpty()) {
 			releaseStockAndRetryPending(order, allocationsToRelease);
 		}
 		return createCancelResponse(order, allocationsToRelease.size(), request.cancellationSource().name(), Instant.now());

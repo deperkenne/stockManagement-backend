@@ -749,16 +749,13 @@ public class AllocationRetryService {
 	private void reallocateNotLineAllo(List<LineAllocation>lineAllocations,RetryRecord item,
 									   int restQty , CustomerOrder order){
 
-		if (restQty == 0){
-			return; // stop le programme
-		}
-
 		// Structures de collecte de données unifiées
 		List<AllocationItem> allocated = new ArrayList<>();
 		Map<UUID, LineItemStatus> lineItemStatusMap = new HashMap<>();
 
+		// La réservation du stock a déjà été faite par replayLine() via reserveStock(lineAllocations)
+		// avant l'appel à upsertAllocationItem() -> ne pas réserver une seconde fois ici.
 		for (LineAllocation lineAllocation : lineAllocations) {
-			lineAllocation.sku().reserveQty(new Quantity(lineAllocation.qty()));
 			allocated.add(buildSuccessAllocationItem(item.orderId(), item, lineAllocation, lineAllocation.qty())); // reserver dans le batch ou liste les ligne allouer
 		}
 
@@ -779,9 +776,8 @@ public class AllocationRetryService {
 		notifyStockAllocated(allocated);
 
 		order.updateLineItemStatus(lineItemStatusMap);
-
-		promoteOrderStatusIfFullyAllocated(order,item.orderId());
-
+		// Pas de promotion du statut de la commande ici : replayOrderLinesTransactionally
+		// s'en charge une seule fois (un 2e appel lèverait InvalidOrderStateException)
 	}
 
 	private void notifyStockAllocated(List<AllocationItem> allocationItems) {
@@ -801,6 +797,12 @@ public class AllocationRetryService {
 									  List<LineAllocation>lineAllocations) {
 		AllocationItem item = line.existingAllocationItem();
 		if (item != null) {
+			// Le stock réservé par ce replay doit être tracé par emplacement (skuId) :
+			// sans ces allocations, il ne pourrait jamais être rendu lors d'une annulation
+			notifyStockAllocated(lineAllocations.stream()
+				.map(la -> buildSuccessAllocationItem(line.orderId(), line, la, la.qty()))
+				.toList());
+
 			if (remainingQty == 0) {
 				// CAS TOTAL: ligne complètement allouée
 				// ici c'est non manager par hibernate donc nous devons save nous meme
@@ -824,7 +826,7 @@ public class AllocationRetryService {
 
 	private void markLineAsFullyAllocated(CustomerOrder order, UUID lineItemId) {
 		order.getLineItems().stream()
-			.filter(line -> line.getId().equals(lineItemId))
+			.filter(line -> line.getId().getValue().equals(lineItemId))
 			.findFirst()
 			.ifPresent(line -> line.changeLineStatus(LineItemStatus.FULLY_ALLOCATED));
 	}

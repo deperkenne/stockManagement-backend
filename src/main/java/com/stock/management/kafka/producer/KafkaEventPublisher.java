@@ -7,6 +7,7 @@ import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.producer.ProducerRecord;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.SendResult;
 import org.springframework.stereotype.Component;
@@ -26,7 +27,8 @@ import java.util.concurrent.TimeUnit;
 public class KafkaEventPublisher {
 
     private final KafkaTemplate<String, Object> kafkaTemplate;
-
+	@Value("${app.kafka.topic.order-received}")
+	private String orderReceivedTopic;
 
 
 	public  void sendToDlt(String dltTopic, String key, Object payload, Throwable exception) {
@@ -132,7 +134,8 @@ public class KafkaEventPublisher {
 
 
 	public CompletableFuture<SendResult<String, Object>> publishOrderReceived(OrderReceivedEvent event) {
-		return send(KafkaTopics.ORDER_RECEIVED_TEST03, event.getOrderId(), event);
+		//return send(KafkaTopics.ORDER_RECEIVED_TEST03, event.getOrderId(), event);
+		return send(orderReceivedTopic, event.getOrderId(), event);
 	}
 
 
