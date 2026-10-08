@@ -186,7 +186,7 @@ public class CustomerOrderTest {
 
 	@Test
 	void nullLineItemsOnOrder_shouldNotThrowOrShouldThrowExplicitly() {
-		order = new CustomerOrder(new OrderId(UUID.fromString("33333333-2222-2222-2222-222222222222")),null,null,List.of());
+		order = new CustomerOrder(new OrderId(UUID.fromString("33333333-2222-2222-2222-222222222222")),null,null,lineItems());
 		// SUT
 		assertThatThrownBy(() -> order.extractEligibleLineIdsForCancellation(uuids))
 			.isInstanceOf(NullPointerException.class)
@@ -280,7 +280,7 @@ public class CustomerOrderTest {
 	@ParameterizedTest(name = "{index}: status={0} => order.getStatus()={0}")
 	@MethodSource("explicitStatuses")
 	void fullyAllocatedOrder_shouldThrowIllegalStateException(OrderStatus status) {
-		CustomerOrder order = new CustomerOrder(new OrderId(UUID.fromString("33333333-2222-2222-2222-222222222222")),status,null,List.of());
+		CustomerOrder order = new CustomerOrder(new OrderId(UUID.fromString("33333333-2222-2222-2222-222222222222")),status,null,lineItems());
 
 		assertThatThrownBy(() -> order.cancel(CancellationSource.CUSTOMER_APP, "no reason", "user123"))
 			.isInstanceOf(IllegalStateException.class)
