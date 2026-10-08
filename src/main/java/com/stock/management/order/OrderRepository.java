@@ -23,13 +23,17 @@ public interface OrderRepository extends JpaRepository<CustomerOrder, OrderId> {
     @Query("SELECT o.status FROM CustomerOrder o WHERE o.id = :id")
     Optional<OrderStatus> findStatusById(@Param("id") OrderId id);
 
+	// 1. Verrou sur la racine uniquement, sans jointure
+	@Lock(LockModeType.PESSIMISTIC_WRITE)
+	@Query("SELECT o FROM CustomerOrder o WHERE o.id = :id")
+	Optional<CustomerOrder> findByIdForUpdate(@Param("id") OrderId id);
 
-    /**
+	/**
      * Mise à jour ciblée du statut d'une commande (utilisée par le flux d'allocation).
      * clearAutomatically/flushAutomatically évitent que le 1er niveau de cache renvoie
      * une entité obsolète si elle est relue dans la même transaction.
      */
-    @Modifying(clearAutomatically = true, flushAutomatically = true)
+	@Modifying
     @Query("UPDATE CustomerOrder o SET o.status = :status WHERE o.id = :orderId")
     int updateOrderStatus(@Param("orderId") OrderId orderId, @Param("status") OrderStatus status);
 
@@ -80,7 +84,7 @@ public interface OrderRepository extends JpaRepository<CustomerOrder, OrderId> {
      * Pas de DISTINCT : PostgreSQL refuse "FOR UPDATE" avec DISTINCT, et Hibernate 6
      * dédoublonne déjà lui-même la commande ramenée par le JOIN FETCH.
      */
-    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    //@Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT o FROM CustomerOrder o LEFT JOIN FETCH o.lineItems WHERE o.id = :id")
     Optional<CustomerOrder> findByIdWithLineItemsForUpdate(@Param("id") OrderId id);
 

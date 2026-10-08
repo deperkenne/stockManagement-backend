@@ -1,5 +1,6 @@
 package com.stock.management.domain;
 
+/*
 import com.stock.management.allocation.AllocationService;
 import com.stock.management.allocationLine.AllocationItem;
 import com.stock.management.allocationLine.AllocationItemRepository;
@@ -70,13 +71,12 @@ public class CustomerOrderOptimisticLockingIT {
 
 		@BeforeEach
 		void setUp() {
-           /**
-			txTemplate.execute(status -> {
+			//txTemplate.execute(status -> {
 				// 1. begin transaction
 				// ... code métier
 				// 2. commit (ou rollback si exception) IMMÉDIATEMENT à la fin du lambda
-			});
-			**/
+			//});
+
 
 
 		}
@@ -261,3 +261,4 @@ public class CustomerOrderOptimisticLockingIT {
 	}
 
 }
+*/

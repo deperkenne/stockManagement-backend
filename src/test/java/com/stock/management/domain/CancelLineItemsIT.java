@@ -1,5 +1,6 @@
 package com.stock.management.domain;
 
+
 import com.stock.management.allocationLine.AllocationItem;
 import com.stock.management.allocationLine.AllocationItemRepository;
 import com.stock.management.allocationLine.AllocationItemStatus;
@@ -41,13 +42,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 
-/**
- * Test d'intégration de OrderService.cancelLineItems (vraie DB + vrai Kafka).
- *
- * Les commandes sont créées une par une, chacune attendue jusqu'à son statut d'allocation :
- * le résultat est donc toujours le même, quel que soit l'ordre de traitement Kafka. Pas de @Transactional sur la classe :
- * l'allocation tourne dans le thread du consumer et le retry en REQUIRES_NEW.
- */
 @SpringBootTest
 @ActiveProfiles("test")
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)

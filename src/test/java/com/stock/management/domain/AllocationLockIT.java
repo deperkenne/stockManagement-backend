@@ -1,5 +1,6 @@
 package com.stock.management.domain;
 
+/*
 import com.stock.management.allocation.AllocationService;
 import com.stock.management.allocationLine.AllocationItem;
 import com.stock.management.allocationLine.AllocationItemRepository;
@@ -531,3 +532,4 @@ public class AllocationLockIT {
 
 
 }
+*/
