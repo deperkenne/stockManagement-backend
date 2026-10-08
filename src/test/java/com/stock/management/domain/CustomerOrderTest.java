@@ -296,7 +296,7 @@ public class CustomerOrderTest {
 	// --- Cas nominal ---
 	@Test
 	void pendingOrder_shouldBeCancelledWithAllFieldsSet() {
-		CustomerOrder order = new CustomerOrder(new OrderId(UUID.fromString("33333333-2222-2222-2222-222222222222")),OrderStatus.PENDING,null,List.of());
+		CustomerOrder order = new CustomerOrder(new OrderId(UUID.fromString("33333333-2222-2222-2222-222222222222")),OrderStatus.PENDING,null,lineItems());
 
 		Instant before = Instant.now();
 		order.cancel(CancellationSource.CUSTOMER_APP, "changed mind", "user123");
@@ -329,6 +329,19 @@ public class CustomerOrderTest {
 		for(LineItem item : lineItems){
             assertEquals(CANCELLED,item.getStatus());
 		}
+	}
+
+
+	private List<LineItem> lineItems(){
+		LineItem item1 = createMockLineItem("11111111-1111-1111-1111-111111111111", null,
+			"PROD01", LineItemStatus.PENDING, 100, "10.0");
+		LineItem item2 = createMockLineItem("22222222-2222-2222-2222-222222222222", null,
+			"PROD02", LineItemStatus.CANCELLED, 200, "20.0");
+		LineItem item3 = createMockLineItem("33333333-2222-2222-2222-222222222222", null,
+			"PROD03", LineItemStatus.PARTIALLY_ALLOCATED, 200, "20.0");
+
+        return List.of(item1,item2,item3);
+
 	}
 
 }
