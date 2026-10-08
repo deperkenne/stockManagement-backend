@@ -97,7 +97,7 @@ jobs:
           SPRING_DATASOURCE_USERNAME: ci
           SPRING_DATASOURCE_PASSWORD: ci
           SPRING_KAFKA_BOOTSTRAP_SERVERS: localhost:9092
-        run: mvn -B -ntp clean verify
+        run: mvn -B -ntp -U clean verify
 
       - name: Calculer le nom de l'image
         id: name
