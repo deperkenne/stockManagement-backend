@@ -63,14 +63,14 @@ jobs:
         env:
           REGISTRY_TOKEN: ${{ github.token }}      # jeton valable uniquement le temps de ce déploiement
         # Le jeton passe par l'entrée standard : il n'apparaît ni dans les logs ni dans la liste des processus
-        run: echo "$REGISTRY_TOKEN" | ssh -i ~/.ssh/id_deploy "$SERVER" "docker login ghcr.io -u '$GITHUB_ACTOR' --password-stdin"
+        run: echo "$REGISTRY_TOKEN" | ssh -i ~/.ssh/id_deploy -p 22616 "$SERVER" "docker login ghcr.io -u '$GITHUB_ACTOR' --password-stdin"
 
       - name: Démarrer la nouvelle version
-        run: ssh -i ~/.ssh/id_deploy "$SERVER" "cd '$DEPLOY_DIR' && IMAGE='$IMAGE' docker compose pull && IMAGE='$IMAGE' docker compose up -d"
+        run: ssh -i ~/.ssh/id_deploy -p 22616 "$SERVER" "cd '$DEPLOY_DIR' && IMAGE='$IMAGE' docker compose pull && IMAGE='$IMAGE' docker compose up -d"
 
       - name: Retirer l'accès au registre du serveur
         if: always()
-        run: ssh -i ~/.ssh/id_deploy "$SERVER" "docker logout ghcr.io"
+        run: ssh -i ~/.ssh/id_deploy -p 22616 "$SERVER" "docker logout ghcr.io"
 
       - name: Vérifier que l'application répond (jusqu'à 2 minutes et 30 secondes)
         run: ssh -i ~/.ssh/id_deploy "$SERVER" "for attempt in \$(seq 1 30); do curl -fsS '$HEALTH_URL' && exit 0; sleep 5; done; exit 1"
