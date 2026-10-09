@@ -1,6 +1,6 @@
 
 server:
-  port: 8090
+  port: 8091
 
 logging:
   # Emplacement et nom du fichier de log sur votre lecteur Z:
