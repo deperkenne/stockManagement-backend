@@ -72,7 +72,7 @@ jobs:
         run: |
           SERVER="$(printf '%s' "$SERVER" | tr -d '[:space:]')"
           ssh -i ~/.ssh/id_deploy -p 22616 "$SERVER" \
-            "cd '$DEPLOY_DIR' && export IMAGE='$IMAGE' COMPOSE_FILE=kafka.yml && docker compose pull && docker compose up -d --remove-orphans"
+            "cd '$DEPLOY_DIR' && export IMAGE='$IMAGE' COMPOSE_FILE=kafka.yml && docker compose pull && docker compose -f kafka.yml up -d --remove-orphans"
            
       - name: Retirer l'accès au registre du serveur
         if: always()
