@@ -90,17 +90,21 @@ jobs:
       # staging, préproduction et production reçoivent exactement les mêmes octets.
       image: ${{ steps.reference.outputs.image }}
     steps:
+      - name: Récupérer le code source
+        uses: actions/checkout@v5
+      - name: Récupérer le jar testé par le job test
+        uses: actions/download-artifact@v4
+        with:
+          name: app-jar
+          path: target           # le Dockerfile copie target/management-*.jar
       - name: Calculer le nom de l'image
         id: name
         # Le registre exige un nom en minuscules
         run: echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
-      - name: Récupérer le code source
-        uses: actions/checkout@v5
       - name: Préparer l'outil de construction Docker
         uses: docker/setup-buildx-action@v3
 
       - name: Se connecter au registre d'images
-        if: github.event_name == 'push'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -112,7 +116,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: ${{ github.event_name == 'push' }}
+          push: true
           # Étiquette lisible par un humain : le commit exact qui a produit l'image
           tags: ${{ steps.name.outputs.image }}:sha-${{ github.sha }}
           cache-from: type=gha
