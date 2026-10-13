@@ -74,6 +74,16 @@ jobs:
           SPRING_KAFKA_BOOTSTRAP_SERVERS: localhost:9092
         run: mvn -B -ntp -U clean verify
 
+      - name: Transmettre le JAR testé au job build
+        # Le job build tourne sur une autre machine : sans cet envoi, il ne trouverait
+        # pas le JAR. On transmet exactement celui qui vient de passer les tests.
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-jar                  # même nom que dans le download-artifact du job build
+          path: target/*.jar
+          if-no-files-found: error       # échoue ici si aucun JAR n'a été produit
+          retention-days: 1              # inutile de le garder plus longtemps
+
   # ───────────────────────────────────────────────────────────────────────────
   # ÉTAPE 1 — Tester et construire l'image (une seule fois pour tout le pipeline)
   # ───────────────────────────────────────────────────────────────────────────
