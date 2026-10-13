@@ -1,23 +1,11 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# PIPELINE CI/CD — stock-management
-#
-# En une phrase : à chaque modification de la branche main, l'application est
-# testée, emballée UNE SEULE FOIS dans une image Docker, puis cette même image
-# est livrée successivement en staging, en préproduction et en production.
-#
-#   Tests + image ──► staging ──► préproduction ──► production
-#                                 (approbation)     (approbation)
-#
-# Sur une Pull Request : seulement les tests et la construction de l'image
-# (pour vérifier que tout fonctionne), sans rien publier ni déployer.
-# ─────────────────────────────────────────────────────────────────────────────
 name: CI/CD
 
 on:
-  pull_request:
-    branches: [release]
-  push:
-    branches: [dev]
+  pull_request:  # quand on propose du code
+    branches: [dev,'release/**',main]
+  push: # quand on pousse sur ces branches
+    branches: [dev,'release/**','hotfix/**']
+    tags: ['v*']
 
 # Par défaut, le pipeline peut seulement LIRE le code. Chaque étape qui a besoin
 # de plus demande explicitement sa permission ci-dessous.
@@ -31,21 +19,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-
-  # ───────────────────────────────────────────────────────────────────────────
-  # ÉTAPE 1 — Tester et construire l'image (une seule fois pour tout le pipeline)
-  # ───────────────────────────────────────────────────────────────────────────
-  build:
-    name: Tests et construction de l'image
+  tests:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write          # nécessaire pour publier l'image dans le registre GitHub
-    outputs:
-      # Référence IMMUABLE de l'image (son empreinte sha256) transmise aux déploiements :
-      # staging, préproduction et production reçoivent exactement les mêmes octets.
-      image: ${{ steps.reference.outputs.image }}
-
     # Base de données et Kafka jetables, démarrés uniquement pour les tests de ce job
     # puis détruits avec lui. Les identifiants ci-dessous ne protègent que ces
     # conteneurs éphémères : ce ne sont pas des secrets.
@@ -99,6 +74,22 @@ jobs:
           SPRING_KAFKA_BOOTSTRAP_SERVERS: localhost:9092
         run: mvn -B -ntp -U clean verify
 
+  # ───────────────────────────────────────────────────────────────────────────
+  # ÉTAPE 1 — Tester et construire l'image (une seule fois pour tout le pipeline)
+  # ───────────────────────────────────────────────────────────────────────────
+  build:
+    needs: test
+    if: github.event_name == 'push'
+    name: Tests et construction de l'image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write          # nécessaire pour publier l'image dans le registre GitHub
+    outputs:
+      # Référence IMMUABLE de l'image (son empreinte sha256) transmise aux déploiements :
+      # staging, préproduction et production reçoivent exactement les mêmes octets.
+      image: ${{ steps.reference.outputs.image }}
+    steps:
       - name: Calculer le nom de l'image
         id: name
         # Le registre exige un nom en minuscules
@@ -136,8 +127,8 @@ jobs:
   # ───────────────────────────────────────────────────────────────────────────
   staging:
     name: Staging
-    needs: build
-    if: github.event_name == 'push'
+    needs: [test,build]
+    if: github.ref == 'refs/heads/dev'
     permissions:
       packages: read           # le serveur doit pouvoir télécharger l'image
     uses: ./.github/workflows/deploy.yml
@@ -151,7 +142,10 @@ jobs:
   # ───────────────────────────────────────────────────────────────────────────
   preproduction:
     name: Préproduction
-    needs: [build, staging]
+    needs: [test,build]
+    if: >-
+      startsWith(github.ref, 'refs/heads/release/') ||
+      startsWith(github.ref, 'refs/heads/hotfix/')
     permissions:
       packages: read
     uses: ./.github/workflows/deploy.yml
@@ -166,7 +160,8 @@ jobs:
   # ───────────────────────────────────────────────────────────────────────────
   production:
     name: Production
-    needs: [build, preproduction]
+    needs: [test,build]
+    if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       packages: read
     uses: ./.github/workflows/deploy.yml
