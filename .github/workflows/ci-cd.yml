@@ -4,7 +4,7 @@ on:
   pull_request:  # quand on propose du code
     branches: [dev,'release/**',main]
   push: # quand on pousse sur ces branches
-    branches: ['release/**','hotfix/**']
+    branches: [dev,'release/**','hotfix/**']
     tags: ['v*']
 
 # Par défaut, le pipeline peut seulement LIRE le code. Chaque étape qui a besoin
@@ -131,7 +131,7 @@ jobs:
     if: github.ref == 'refs/heads/dev'
     permissions:
       packages: read           # le serveur doit pouvoir télécharger l'image
-    uses: ./.github/workflows/deploy.yml
+    uses: ./.github/workflows/deploy_staging.yml
     with:
       environment: staging
       image: ${{ needs.build.outputs.image }}
@@ -148,7 +148,7 @@ jobs:
       startsWith(github.ref, 'refs/heads/hotfix/')
     permissions:
       packages: read
-    uses: ./.github/workflows/deploy.yml
+    uses: ./.github/workflows/deploy_staging.yml
     with:
       environment: preproduction
       image: ${{ needs.build.outputs.image }}
@@ -164,7 +164,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       packages: read
-    uses: ./.github/workflows/deploy.yml
+    uses: ./.github/workflows/deploy_staging.yml
     with:
       environment: production
       image: ${{ needs.build.outputs.image }}
