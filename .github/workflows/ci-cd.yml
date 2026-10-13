@@ -94,7 +94,8 @@ jobs:
         id: name
         # Le registre exige un nom en minuscules
         run: echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
-
+      - name: Récupérer le code source
+        uses: actions/checkout@v5
       - name: Préparer l'outil de construction Docker
         uses: docker/setup-buildx-action@v3
 
