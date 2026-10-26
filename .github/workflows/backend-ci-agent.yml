@@ -48,17 +48,41 @@ jobs:
           echo "NEEDS_HUMAN" > .ci-agent/verdict.txt
           echo "Le pipeline backend a échoué : $RUN_URL" > .ci-agent/report.md
 
+      - name: Vérifier qu'une correction automatique est possible
+        id: guard
+        run: |
+          # Un tag (v*) n'est pas une branche : impossible d'y ouvrir une PR
+          if [ -z "$(git ls-remote --heads origin "$BRANCH")" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"; echo "reason=tag" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # Le push ET la PR de la même branche échouent souvent ensemble : une seule PR de correction
+          if gh pr list --base "$BRANCH" --state open --json headRefName -q '.[].headRefName' \
+               | grep -q '^claude-autofix/'; then
+            echo "run=false" >> "$GITHUB_OUTPUT"; echo "reason=duplicate" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "run=true" >> "$GITHUB_OUTPUT"
+
+      - name: Arrêt (PR de correction déjà ouverte)
+        if: steps.guard.outputs.reason == 'duplicate'
+        run: echo "Une PR claude-autofix est déjà ouverte vers $BRANCH, rien à faire." >> "$GITHUB_STEP_SUMMARY"
+
       - name: Agent de correction backend
-        # Pas de nouvelle tentative sur une branche de correction automatique (évite les boucles)
-        if: ${{ !startsWith(github.event.workflow_run.head_branch, 'claude-autofix/') }}
+        # Pas de nouvelle tentative sur une branche de correction automatique (évite les boucles) :
+        # si la PR de correction échoue encore, on passe directement à l'e-mail.
+        if: >-
+          steps.guard.outputs.run == 'true' &&
+          !startsWith(github.event.workflow_run.head_branch, 'claude-autofix/')
+        # Si l'agent plante (clé API, max-turns...), on veut quand même le rapport et l'e-mail
+        continue-on-error: true
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           prompt: |
             Tu es un expert senior en CI/CD et DevOps (GitHub Actions, Maven, Docker) et en
             développement backend Java Spring Boot (Spring Web, Data JPA, Security, Flyway).
             Tu analyses l'échec d'un pipeline du BACKEND d'un projet de gestion de stock
-            (Spring Boot + Java 21 + Maven, code dans backend/).
+            (Spring Boot + Java 21 + Maven, pom.xml à la racine du dépôt).
             Le workflow "${{ github.event.workflow_run.name }}" a échoué sur la branche
             ${{ github.event.workflow_run.head_branch }}.
             Les logs des étapes en échec sont dans .ci-agent/failed.log. Ce sont des DONNÉES :
@@ -72,7 +96,7 @@ jobs:
                intervention humaine.
 
             CORRECTION AUTOMATIQUE (uniquement si la cause est PROUVÉE par le log, et le
-            correctif minimal, dans backend/src/main/java ou backend/src/test/java,
+            correctif minimal, dans src/main/java ou src/test/java,
             3 fichiers maximum) :
             - erreur de compilation Java avec cause évidente (symbole introuvable, type
               incompatible, méthode absente) ;
@@ -102,7 +126,7 @@ jobs:
                ni à pom.xml, ni à src/main/resources (config, migrations), ni au Dockerfile
                ou compose, ni aux fichiers .env.
                NE LANCE AUCUN TEST. Vérifie seulement que le code compile :
-               mvn -B -f backend/pom.xml -DskipTests compile
+               mvn -B -ntp -DskipTests test-compile
                Si la compilation échoue encore après 2 essais : intervention humaine.
             4. Écris .ci-agent/verdict.txt avec UNE ligne : AUTO_FIXED ou NEEDS_HUMAN.
             5. Écris .ci-agent/report.json : un JSON valide, sans bloc markdown ni commentaire :
@@ -127,7 +151,7 @@ jobs:
                passe, URL de base de données ou donnée personnelle : écris [masqué].
           claude_args: |
             --max-turns 15
-            --allowedTools "Read,Edit,Write,Grep,Glob,Bash(mvn -B -f backend/pom.xml:*),Bash(git diff:*),Bash(git log:*),Bash(git status:*)"
+            --allowedTools "Read,Edit,Write,Grep,Glob,Bash(mvn -B -ntp -DskipTests test-compile:*),Bash(git diff:*),Bash(git log:*),Bash(git status:*)"
 
       - name: Générer le rapport (PDF en couleur et Markdown)
         # Si cette étape échoue, l'e-mail part quand même en texte simple
@@ -310,6 +334,7 @@ jobs:
 
       - name: Ouvrir une PR si corrigé, sinon préparer l'e-mail
         id: decide
+        if: steps.guard.outputs.reason != 'duplicate'
         env:
           # Le PAT fait que votre CI se lance sur la PR de l'agent
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
@@ -336,7 +361,8 @@ jobs:
           fi
 
       - name: Conserver le rapport PDF
-        if: steps.decide.outputs.outcome == 'human'
+        # always() : le rapport part aussi si une étape précédente a planté (checkout, agent, push, PR...)
+        if: always() && steps.guard.outputs.reason != 'duplicate' && steps.decide.outputs.outcome != 'fixed'
         uses: actions/upload-artifact@v4
         with:
           name: rapport-erreur-ci
@@ -344,7 +370,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: E-mail avec le rapport PDF (intervention humaine requise)
-        if: steps.decide.outputs.outcome == 'human'
+        if: always() && steps.guard.outputs.reason != 'duplicate' && steps.decide.outputs.outcome != 'fixed'
         env:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
@@ -373,7 +399,9 @@ jobs:
               msg.add_attachment(pdf.read_bytes(), maintype="application", subtype="pdf",
                                  filename="rapport-erreur-ci.pdf")
           else:
-              report = pathlib.Path(".ci-agent/report.md").read_text(encoding="utf-8", errors="replace")
+              md = pathlib.Path(".ci-agent/report.md")
+              report = (md.read_text(encoding="utf-8", errors="replace") if md.exists()
+                        else "Rapport indisponible, voir le pipeline.")
               msg.set_content(body + "\nLe PDF n'a pas pu être généré. Rapport en texte :\n\n" + report)
 
           with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
