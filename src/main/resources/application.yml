@@ -40,7 +40,7 @@ spring:
     database-platform: org.hibernate.dialect.PostgreSQLDialect
 #    database-platform: org.hibernate.dialect.H2Dialect
     hibernate:
-      ddl-auto: update        # update = crée les tables si elles n'existent pas, ajoute les colonnes manquantes sans supprimer les données
+      ddl-auto: create        # create = supprime puis recrée toutes les tables à chaque démarrage (toutes les données sont perdues)
     open-in-view: false
    # show-sql: true            # affiche les requêtes SQL dans la console
     properties:
@@ -106,26 +106,25 @@ spring:
           ssl:
             trust: smtp.gmail.com
 
+  # Sécurité : validation des JWT émis par Keycloak
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          # Spring récupère la clé publique (JWKS) de ce realm pour vérifier la signature de chaque token.
+          # Format : http://<keycloak-host>:<port>/realms/<realm>
+          issuer-uri: ${KEYCLOAK_ISSUER_URI:http://192.168.178.27:8090/realms/orderManagement}
+
 app:
   kafka:
     topic:
       order-received: order.received
+  security:
+    keycloak:
+      # Doit correspondre exactement au Client ID dans Keycloak (lecture de resource_access.{client-id}.roles)
+      client-id: ${KEYCLOAK_CLIENT_ID:order-management-app}
 
-#  security:
-#    oauth2:
-#      resourceserver:
-#        jwt:
-          # Spring Security contacte ce endpoint au démarrage pour récupérer la clé publique (JWKS)
-          # et valider la signature de chaque token entrant.
-          # Format : http://<keycloak-host>:<port>/realms/<votre-realm>
-#          issuer-uri: ${KEYCLOAK_ISSUER_URI:http://192.168.178.27:8090/realms/orderManagement}
 
-#app:
-#  security:
-#    keycloak:
-      # Doit correspondre exactement au Client ID configuré dans Keycloak
-      # (utilisé pour extraire resource_access.{client-id}.roles)
-#      client-id: ${KEYCLOAK_CLIENT_ID:order-management-app}
 
 
 management:

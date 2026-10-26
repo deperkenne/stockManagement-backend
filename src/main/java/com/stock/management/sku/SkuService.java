@@ -7,6 +7,7 @@ import com.stock.management.order.domain.ProductNr;
 import com.stock.management.order.domain.Quantity;
 import com.stock.management.sku.domain.Sku;
 import com.stock.management.sku.domain.SkuId;
+import com.stock.management.sku.domain.WarehouseLocation;
 import com.stock.management.sku.dto.CreateSkuRequest;
 import com.stock.management.sku.dto.SkuResponse;
 import lombok.RequiredArgsConstructor;
@@ -27,6 +28,7 @@ import java.util.stream.Collectors;
 public class SkuService {
 
     private final SkuRepository skuRepository;
+    private final WarehouseLocationRepository locationRepository;
 
 
 	private final JdbcTemplate jdbcTemplate;
@@ -205,14 +207,14 @@ public class SkuService {
 	@Transactional
     public SkuResponse createSku(CreateSkuRequest request) {
 
-        if (skuRepository.existsByProductNrAndLocationCode(request.productNr(), request.locationCode())) {
-            throw new DuplicateSkuException(
-                    "SKU already exists for productNr=" + request.productNr()
-                    + " at location=" + request.locationCode());
+        // L'emplacement doit déjà exister (créé via /api/v1/locations) et être libre
+        WarehouseLocation location = findLocationByCode(request.locationCode());
+        if (skuRepository.existsByLocationId(location.getId())) {
+            throw new DuplicateSkuException("Location already contains a SKU: " + location.getCode());
         }
 
         Sku sku = Sku.create(new ProductNr(request.productNr()),
-                new Quantity(request.totalQuantity()), request.locationCode());
+                new Quantity(request.totalQuantity()), location);
         sku = skuRepository.save(sku);
 
         return toResponse(sku);
@@ -272,7 +274,8 @@ public class SkuService {
     }
 
     /**
-     * UPDATE (PUT) — remplace productNr, totalQuantity et locationCode.
+     * UPDATE (PUT) — remplace productNr et totalQuantity ; si locationCode change, le stock est
+     * DÉPLACÉ vers cet autre emplacement existant (l'ancien emplacement n'est ni renommé ni supprimé).
      * L'id (SkuId) reste toujours celui de l'URL : impossible de "voler" l'id d'un autre SKU via le body.
      */
     @Transactional
@@ -281,13 +284,16 @@ public class SkuService {
         Sku sku = skuRepository.findById(skuId)
                 .orElseThrow(() -> new SkuNotFoundException("SKU not found: " + id));
 
-        String newLocationCode = request.locationCode().trim().toUpperCase();
-        boolean locationChanged = !newLocationCode.equals(sku.getLocation().getCode());
-        if (locationChanged && skuRepository.existsByLocationCodeExcludingId(newLocationCode, skuId)) {
-            throw new DuplicateSkuException("Un autre SKU utilise déjà l'emplacement: " + newLocationCode);
+        String newLocationCode = WarehouseLocation.normalizeCode(request.locationCode());
+        if (!newLocationCode.equals(sku.getLocation().getCode())) {
+            WarehouseLocation target = findLocationByCode(newLocationCode);
+            if (skuRepository.existsByLocationCodeExcludingId(newLocationCode, skuId)) {
+                throw new DuplicateSkuException("Un autre SKU utilise déjà l'emplacement: " + newLocationCode);
+            }
+            sku.moveTo(target);
         }
 
-        sku.updateDetails(new ProductNr(request.productNr()), new Quantity(request.totalQuantity()), request.locationCode());
+        sku.updateDetails(new ProductNr(request.productNr()), new Quantity(request.totalQuantity()));
 
         log.info("[SKU] Updated skuId={} productNr={} location={} totalQty={}",
                 id, sku.getProductNr().getValue(), sku.getLocation().getCode(), sku.getTotalQuantity().getValue());
@@ -296,8 +302,8 @@ public class SkuService {
     }
 
     /**
-     * DELETE — supprime le SKU. cascade=ALL + orphanRemoval=true sur WarehouseLocation supprime
-     * automatiquement l'emplacement associé. StockAllocation/AllocationItem stockent skuId en UUID
+     * DELETE — supprime le SKU. L'emplacement associé est conservé et redevient libre
+     * (il se supprime via /api/v1/locations). StockAllocation/AllocationItem stockent skuId en UUID
      * brut (pas de @JoinColumn JPA) : aucune contrainte de clé étrangère ne peut donc bloquer cette suppression.
      */
     @Transactional
@@ -311,6 +317,12 @@ public class SkuService {
     }
 
     // ─── Private helpers ──────────────────────────────────────────────────────────
+
+    private WarehouseLocation findLocationByCode(String code) {
+        String normalized = WarehouseLocation.normalizeCode(code);
+        return locationRepository.findByCode(normalized)
+                .orElseThrow(() -> new LocationNotFoundException("Location not found: " + normalized));
+    }
 
     private SkuResponse toResponse(Sku sku) {
         return new SkuResponse(

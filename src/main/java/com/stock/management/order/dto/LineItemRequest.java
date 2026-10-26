@@ -1,8 +1,6 @@
 package com.stock.management.order.dto;
 
-import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 
 import java.math.BigDecimal;
@@ -15,7 +13,9 @@ public record LineItemRequest(
         @Positive(message = "requestedQty must be greater than 0")
 		Integer requestedQty,
 
-        @NotNull(message = "unitPrice must not be null")
-        @DecimalMin(value = "0.00", message = "unitPrice must not be negative")
+        /**
+         * Ignoré à la réception d'une commande : OrderService utilise le prix catalogue du Product.
+         * Conservé pour la compatibilité des clients existants (champ optionnel).
+         */
         BigDecimal unitPrice
 ) {}

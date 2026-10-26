@@ -10,13 +10,19 @@ import org.springframework.http.HttpMethod;
 //import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 //import org.springframework.security.config.http.SessionCreationPolicy;
 //import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
+import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 import java.util.List;
 
-/*
+
 @Configuration
 @EnableWebSecurity
 @EnableMethodSecurity(prePostEnabled = true)
@@ -40,7 +46,12 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                 // Endpoint de notification public (formulaire de contact sans auth)
 				.requestMatchers("/api/notification/**").hasRole("DEV")
-				.requestMatchers("/api/skus/**").permitAll()
+				.requestMatchers("/api/v1/orders/admin").hasRole("ADMIN")
+				.requestMatchers("/api/v1/orders/client").hasRole("CUSTOMER")
+				.requestMatchers("/api/v1/skus/**").permitAll()
+				.requestMatchers("/api/v1/orders/**").permitAll()
+				.requestMatchers("/api/v1/products/**").permitAll()
+				.requestMatchers("/api/v1/locations/**").permitAll()
 				.requestMatchers("/error").permitAll()
 				.requestMatchers("/h2-console/**").permitAll()
                 .anyRequest().authenticated()
@@ -82,4 +93,4 @@ public class SecurityConfig {
         return source;
     }
 }
-*/
+

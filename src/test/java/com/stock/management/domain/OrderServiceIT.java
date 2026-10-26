@@ -1,5 +1,6 @@
 package com.stock.management.domain;
 
+import com.stock.management.customer.CustomerIdentity;
 import com.stock.management.order.OrderOutboxRepository;
 import com.stock.management.order.OrderRepository;
 import com.stock.management.order.OrderService;
@@ -50,7 +51,7 @@ public class OrderServiceIT {
 		createOrderRequest = new CreateOrderRequest(Priority.HIGH, false, "EUR", List.of(item01));
 
 		// WHEN : On tente de créer la commande
-		assertThatThrownBy(() -> orderService.receiveOrder(createOrderRequest))
+		assertThatThrownBy(() -> orderService.receiveOrder(new CustomerIdentity("it-customer", null, null), createOrderRequest))
 			.isInstanceOf(IllegalArgumentException.class);
 
 		// THEN : On vérifie que la transaction a bien fait un ROLLBACK en base
