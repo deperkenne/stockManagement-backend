@@ -1,5 +1,9 @@
 package com.stock.management.order;
 
+import com.stock.management.customer.Customer;
+import com.stock.management.customer.CustomerIdentity;
+import com.stock.management.customer.CustomerService;
+
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.stock.management.allocation.AllocationReleasedEvent;
@@ -13,6 +17,7 @@ import com.stock.management.kafka.producer.KafkaEventPublisher;
 import com.stock.management.order.domain.*;
 import com.stock.management.order.dto.*;
 import com.stock.management.order.internal.OrderValidator;
+import com.stock.management.product.ProductService;
 import com.stock.management.sku.SkuService;
 import com.stock.management.sku.domain.Sku;
 import com.stock.management.sku.dto.SkuResponse;
@@ -57,7 +62,9 @@ public class OrderService {
 	private final ApplicationEventPublisher eventPublisher;
 	private final KafkaEventPublisher kafkaEventPublisher;
 	private final ObjectMapper objectMapper;
+	private final CustomerService customerService;
 	private final OrderOutboxRepository outboxRepository;
+	private final ProductService productService;
 	@PersistenceContext
 	private final EntityManager entityManager; // tres important quand il vas nous aidez a persister
 	                                           // les donnee vers la db sans attendre le commit de Hibernate
@@ -77,13 +84,18 @@ public class OrderService {
     // ─── Création ─────────────────────────────────────────────────────────────────
 
 
+	/**
+	 * @param identity client du JWT Keycloak (fourni par le controller, jamais par le body),
+	 *                 créé en base à sa première commande (Just-In-Time provisioning)
+	 */
 	@Transactional
-	public CreateOrderResponse receiveOrder(CreateOrderRequest request) {
+	public CreateOrderResponse receiveOrder(CustomerIdentity identity, CreateOrderRequest request) {
 		// 1. Validation de la requête
 		orderValidator.validateNoDuplicateProductNr(request);
 
 		// 2. Création et persistance (Order + Historique initial)
-		CustomerOrder order = createAndPersistOrder(request);
+		Customer customer = customerService.getOrCreate(identity);
+		CustomerOrder order = createAndPersistOrder(customer, request);
 
 		// 3. Publication de l'événement
 		//publishOrderReceivedEvent(order);
@@ -128,14 +140,24 @@ public class OrderService {
                 .toList();
     }
 
-    /** Variante paginée — à utiliser dès que le volume de commandes rend findAll() sans pagination coûteux. */
-    public Page<CreateOrderResponse> findAll(Pageable pageable) {
-        return orderRepository.findAll(pageable).map(o -> toOrderResponse(o, false));
-    }
 
     /** GET /api/orders/{orderId} — détail complet avec toutes les lignes. */
     public CreateOrderResponse findById(UUID orderId) {
         CustomerOrder order = orderRepository.findByIdWithLineItems(new OrderId(orderId))
+                .orElseThrow(() -> new OrderNotFoundException("Order not found: " + orderId));
+        return toOrderResponse(order, true);
+    }
+
+    /** GET /api/orders côté client : uniquement les commandes du client connecté. */
+    public List<CreateOrderResponse> findAllByCustomer(String customerId) {
+        return orderRepository.findByCustomerIdOrderByReceivedAtDesc(customerId).stream()
+                .map(o -> toOrderResponse(o, false))
+                .toList();
+    }
+
+    /** GET /api/orders/{orderId} côté client : 404 si la commande n'existe pas OU n'appartient pas au client. */
+    public CreateOrderResponse findByIdForCustomer(UUID orderId, String customerId) {
+        CustomerOrder order = orderRepository.findByIdAndCustomerIdWithLineItems(new OrderId(orderId), customerId)
                 .orElseThrow(() -> new OrderNotFoundException("Order not found: " + orderId));
         return toOrderResponse(order, true);
     }
@@ -146,7 +168,9 @@ public class OrderService {
     public CreateOrderResponse addLineItem(UUID orderId, LineItemRequest request) {
         CustomerOrder order = orderRepository.findByIdWithLineItems(new OrderId(orderId))
                 .orElseThrow(() -> new OrderNotFoundException("Order not found: " + orderId));
-        order.addLineItem(new ProductNr(request.productNr()), new Quantity(request.requestedQty()), request.unitPrice());
+        // Prix catalogue lu en base : le unitPrice éventuel du corps de requête est ignoré
+        BigDecimal unitPrice = productService.getUnitPrice(request.productNr());
+        order.addLineItem(new ProductNr(request.productNr()), new Quantity(request.requestedQty()), unitPrice);
         log.info("[ORDER] Added line productNr={} to orderId={}", request.productNr(), orderId);
         return toOrderResponse(order, true);
     }
@@ -162,7 +186,10 @@ public class OrderService {
                 : List.of();
         return new CreateOrderResponse(
 			order.getId().toString(),
+			order.getCustomerId(),
 			order.getStatus().name(),
+			order.getPriority().name(),
+			order.isCompleteDeliveryRequired(),
 			order.getLineItems().size(),
 			order.getReceivedAt()
 		);
@@ -214,7 +241,7 @@ public class OrderService {
 		order.cancel(request.cancellationSource(),request.reason(),request.cancelledBy()); // call cancel function to change all orderLineItemStatus to Cancelled also orderStatus to Cancelled
 		log.info("[ORDER-CANCELaTION]-SUCCESS");
 		orderStatusHistoryRepository.save(OrderStatusHistory.of(
-				orderId.getValue(), oldStatus, CANCELLED, "CANCEL:" + request.cancellationSource().name()));
+				orderId.getValue(), order.getCustomerId(), oldStatus, CANCELLED, "CANCEL:" + request.cancellationSource().name()));
 
 		log.info("[CANCEL] Order {} successfully transitioned from {} to CANCELLED.", orderId, oldStatus);
 
@@ -312,7 +339,7 @@ public class OrderService {
 		String historyReason = order.getStatus() == CANCELLED
 			? "CANCEL:" + request.cancellationSource().name()
 			: "PARTIAL_CANCEL";
-		logStatusChangeIfAny(orderId, oldStatus, order.getStatus(), historyReason);
+		logStatusChangeIfAny(orderId, order.getCustomerId(), oldStatus, order.getStatus(), historyReason);
 
 		// Libération dès qu'il existe du stock réservé, quel que soit l'ancien statut de la commande :
 		// les allocations viennent d'être annulées, ne pas rendre leur stock le perdrait définitivement
@@ -350,8 +377,9 @@ public class OrderService {
 		orderRepository.updateOrderStatus(orderId, OrderStatus.ALLOCATION_FAILED);
 		// meme updateAllLinesStatus dois etre gerer par Hibernete
 		int updatedLines = orderRepository.updateAllLinesStatusIfChanged(orderId, LineItemStatus.NOT_ALLOCATED);
+		String customerId = orderRepository.findCustomerIdById(orderId).orElse(null);
 		orderStatusHistoryRepository.save(
-				OrderStatusHistory.of(orderId.getValue(), currentStatus, OrderStatus.ALLOCATION_FAILED, "ALLOCATION_FAILED"));
+				OrderStatusHistory.of(orderId.getValue(), customerId, currentStatus, OrderStatus.ALLOCATION_FAILED, "ALLOCATION_FAILED"));
 
 		log.info("[ORDER-BACKEND] Successfully transitioned order {} to ALLOCATION_FAILED. {} lines updated.", orderId, updatedLines);
 	}
@@ -386,9 +414,9 @@ public class OrderService {
 	}
 
 	/** Enregistre une entrée d'historique uniquement si le statut a réellement changé. */
-	private void logStatusChangeIfAny(UUID orderId, OrderStatus oldStatus, OrderStatus newStatus, String reason) {
+	private void logStatusChangeIfAny(UUID orderId, String customerId, OrderStatus oldStatus, OrderStatus newStatus, String reason) {
 		if (oldStatus != newStatus) {
-			orderStatusHistoryRepository.save(OrderStatusHistory.of(orderId, oldStatus, newStatus, reason));
+			orderStatusHistoryRepository.save(OrderStatusHistory.of(orderId, customerId, oldStatus, newStatus, reason));
 		}
 	}
 
@@ -481,12 +509,13 @@ public class OrderService {
 	}
 
 
-	private CustomerOrder createAndPersistOrder(CreateOrderRequest request) {
+	private CustomerOrder createAndPersistOrder(Customer customer, CreateOrderRequest request) {
 		CustomerOrder order = CustomerOrder.create(
+			customer,
 			request.priority(),
 			request.completeDeliveryRequired(),
 			request.currency(),
-			request.lineItems()
+			withCatalogPrices(request.lineItems())
 		);
 
 		log.info("[ORDER] Saving new orderId={} with initial status={}", order.getId(), order.getStatus());
@@ -494,10 +523,20 @@ public class OrderService {
 		CustomerOrder savedOrder = orderRepository.save(order);
 
 		orderStatusHistoryRepository.save(
-			OrderStatusHistory.of(savedOrder.getId().getValue(), null, savedOrder.getStatus(), "ORDER_RECEIVED")
+			OrderStatusHistory.of(savedOrder.getId().getValue(), savedOrder.getCustomerId(), null, savedOrder.getStatus(), "ORDER_RECEIVED")
 		);
 
 		return savedOrder;
+	}
+
+	/**
+	 * Remplace le unitPrice envoyé par le client par le prix catalogue du produit en base.
+	 * Produit inconnu → ProductNotFoundException.
+	 */
+	private List<LineItemRequest> withCatalogPrices(List<LineItemRequest> lineItems) {
+		return lineItems.stream()
+			.map(li -> new LineItemRequest(li.productNr(), li.requestedQty(), productService.getUnitPrice(li.productNr())))
+			.toList();
 	}
 
 	private void createAndPersistOrderOutBox(CustomerOrder order){
@@ -527,7 +566,10 @@ public class OrderService {
 	private CreateOrderResponse orderMapper(CustomerOrder order){
 		return new CreateOrderResponse(
 			order.getId().toString(),
+			order.getCustomerId(),
 			order.getStatus().name(),
+			order.getPriority().name(),
+			order.isCompleteDeliveryRequired(),
 			order.getLineItems().size(),
 			order.getReceivedAt()
 		);

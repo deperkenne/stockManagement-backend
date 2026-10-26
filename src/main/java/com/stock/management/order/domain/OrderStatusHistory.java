@@ -47,13 +47,19 @@ public class OrderStatusHistory {
     @Column(name = "changed_at", nullable = false)
     private Instant changedAt;
 
+	// Copie du customerId de la commande : permet de lire l'historique d'un client sans jointure
+	@Column(name = "customer_id", nullable = false, updatable = false)
+	private String customerId;
+
     // Courte étiquette d'origine du changement : "ORDER_RECEIVED", "CUSTOMER_APP", "ALLOCATION_FAILED"...
     @Column(name = "reason", length = 100)
     private String reason;
 
-    public static OrderStatusHistory of(UUID orderId, OrderStatus previousStatus, OrderStatus newStatus, String reason) {
+    public static OrderStatusHistory of(UUID orderId, String customerId, OrderStatus previousStatus,
+                                        OrderStatus newStatus, String reason) {
         OrderStatusHistory history = new OrderStatusHistory();
         history.orderId = orderId;
+        history.customerId = customerId;
         history.previousStatus = previousStatus;
         history.newStatus = newStatus;
         history.changedAt = Instant.now();

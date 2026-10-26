@@ -72,6 +72,20 @@ public interface OrderRepository extends JpaRepository<CustomerOrder, OrderId> {
     @Query("SELECT DISTINCT o FROM CustomerOrder o LEFT JOIN FETCH o.lineItems WHERE o.id = :id")
     Optional<CustomerOrder> findByIdWithLineItems(@Param("id") OrderId id);
 
+	/** Projection légère : uniquement le customerId (utilisé pour écrire l'historique sans charger l'agrégat). */
+	@Query("SELECT o.customer.id FROM CustomerOrder o WHERE o.id = :id")
+	Optional<String> findCustomerIdById(@Param("id") OrderId id);
+
+	/** Commandes d'un client (customerId = claim "sub" Keycloak), les plus récentes d'abord. */
+	@Query("SELECT o FROM CustomerOrder o WHERE o.customer.id = :customerId ORDER BY o.receivedAt DESC")
+	List<CustomerOrder> findByCustomerIdOrderByReceivedAtDesc(@Param("customerId") String customerId);
+
+	/** Détail d'une commande uniquement si elle appartient au client : sinon Optional vide (pas de fuite). */
+	@Query("SELECT DISTINCT o FROM CustomerOrder o LEFT JOIN FETCH o.lineItems " +
+		"WHERE o.id = :id AND o.customer.id = :customerId")
+	Optional<CustomerOrder> findByIdAndCustomerIdWithLineItems(@Param("id") OrderId id,
+	                                                           @Param("customerId") String customerId);
+
 	@Query("SELECT DISTINCT o FROM CustomerOrder o LEFT JOIN FETCH o.lineItems WHERE o.id IN :ids")
 	List<CustomerOrder> findAllByIdsWithLineItems(@Param("ids") List<OrderId> ids);
 

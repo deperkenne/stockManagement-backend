@@ -33,9 +33,12 @@ public class Sku {
     @AttributeOverride(name = "value", column = @Column(name = "available_qty", nullable = false))
     private Quantity availableQuantity;
 
-    // Composition : WarehouseLocation ne peut pas exister sans son SKU
-    @OneToOne(cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.EAGER)
-    @JoinColumn(name = "location_id", nullable = false)
+    // Référence (pas composition) : l'emplacement vit indépendamment du SKU.
+    // unique = true : au plus un SKU par emplacement (0..1 côté emplacement, 1 côté SKU).
+    // Pas de REMOVE ni d'orphanRemoval : supprimer un SKU ne supprime jamais l'emplacement.
+    // PERSIST/MERGE : permet encore de créer SKU + nouvel emplacement en un seul save (initialisation, tests).
+    @ManyToOne( fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "location_id", nullable = false, unique = true)
     private WarehouseLocation location;
 
     @Version
@@ -44,14 +47,23 @@ public class Sku {
 
     // ─── Factory ─────────────────────────────────────────────────────────────────
 
-    public static Sku create(ProductNr productNr, Quantity totalQuantity, String locationCode) {
+    /** Crée un SKU dans un emplacement existant. */
+    public static Sku create(ProductNr productNr, Quantity totalQuantity, WarehouseLocation location) {
+        if (location == null) {
+            throw new IllegalArgumentException("Location must not be null");
+        }
         Sku sku = new Sku();
         sku.id = SkuId.generate();
         sku.productNr = productNr;
         sku.totalQuantity = totalQuantity;
         sku.availableQuantity = totalQuantity;
-        sku.location = WarehouseLocation.create(locationCode);
+        sku.location = location;
         return sku;
+    }
+
+    /** Raccourci : crée le SKU et un nouvel emplacement en même temps (initialisation de données, tests). */
+    public static Sku create(ProductNr productNr, Quantity totalQuantity, String locationCode) {
+        return create(productNr, totalQuantity, WarehouseLocation.create(locationCode));
     }
 
     // ─── Business methods ─────────────────────────────────────────────────────────
@@ -90,24 +102,27 @@ public class Sku {
         this.availableQuantity = new Quantity(availableQuantity.getValue() + qty.getValue());
     }
 
-    public void lockLocation(String reason) {
-        location.lock(reason);
-    }
-
-    public void unlockLocation() {
-        location.unlock();
-    }
-
     public boolean hasAvailableStock(Quantity requested) {
         return !location.isLocked() && availableQuantity.getValue() >= requested.getValue();
     }
 
     /**
-     * Mise à jour "CRUD" (PUT) : remplace productNr, totalQuantity et l'emplacement.
+     * Déplace le stock vers un autre emplacement existant.
+     * L'ancien emplacement n'est ni renommé ni supprimé : il redevient simplement libre.
+     */
+    public void moveTo(WarehouseLocation newLocation) {
+        if (newLocation == null) {
+            throw new IllegalArgumentException("Location must not be null");
+        }
+        this.location = newLocation;
+    }
+
+    /**
+     * Mise à jour "CRUD" (PUT) : remplace productNr et totalQuantity (le déplacement passe par moveTo).
      * availableQuantity est ajustée du même delta que totalQuantity, pour ne jamais dépasser
      * ce qui est physiquement possible ni descendre sous 0 (protège le stock déjà réservé).
      */
-    public void updateDetails(ProductNr productNr, Quantity totalQuantity, String locationCode) {
+    public void updateDetails(ProductNr productNr, Quantity totalQuantity) {
         int delta = totalQuantity.getValue() - this.totalQuantity.getValue();
         int newAvailable = this.availableQuantity.getValue() + delta;
         if (newAvailable < 0) {
@@ -118,6 +133,5 @@ public class Sku {
         this.productNr = productNr;
         this.totalQuantity = totalQuantity;
         this.availableQuantity = new Quantity(newAvailable);
-        this.location.rename(locationCode);
     }
 }

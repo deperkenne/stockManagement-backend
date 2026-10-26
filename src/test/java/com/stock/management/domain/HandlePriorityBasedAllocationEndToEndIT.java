@@ -1,5 +1,6 @@
 package com.stock.management.domain;
 
+import com.stock.management.customer.CustomerIdentity;
 import com.stock.management.allocationLine.AllocationItemRepository;
 import com.stock.management.kafka.config.KafkaTopics;
 import com.stock.management.order.OrderOutboxRepository;
@@ -158,10 +159,10 @@ public class HandlePriorityBasedAllocationEndToEndIT {
 			Priority.NORMAL, true, "EUR", List.of(item05, item06));
 
 
-		String lowOrderId = orderService.receiveOrder(createOrderRequest01).orderId();
-		String normalOrderId2 = orderService.receiveOrder(createOrderRequest04).orderId();
-		String highOrderId = orderService.receiveOrder(createOrderRequest02).orderId();
-		String normalOrderId = orderService.receiveOrder(createOrderRequest03).orderId();
+		String lowOrderId = orderService.receiveOrder(new CustomerIdentity("it-customer", null, null), createOrderRequest01).orderId();
+		String normalOrderId2 = orderService.receiveOrder(new CustomerIdentity("it-customer", null, null), createOrderRequest04).orderId();
+		String highOrderId = orderService.receiveOrder(new CustomerIdentity("it-customer", null, null), createOrderRequest02).orderId();
+		String normalOrderId = orderService.receiveOrder(new CustomerIdentity("it-customer", null, null), createOrderRequest03).orderId();
 
 
 		List<String> orderIds = List.of(lowOrderId, highOrderId, normalOrderId,normalOrderId2);

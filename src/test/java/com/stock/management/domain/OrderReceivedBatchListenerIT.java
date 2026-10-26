@@ -1,5 +1,6 @@
 package com.stock.management.domain;
 
+import com.stock.management.customer.CustomerIdentity;
 import com.stock.management.allocationLine.AllocationItem;
 import com.stock.management.allocationLine.AllocationItemRepository;
 import com.stock.management.kafka.config.KafkaTopics;
@@ -154,7 +155,7 @@ public class OrderReceivedBatchListenerIT {
 				.map(l -> new LineItemRequest(l.productNr(), l.quantity(), new BigDecimal("10.00")))
 				.toList();
 			String orderId = orderService
-				.receiveOrder(new CreateOrderRequest(def.priority(), def.urgent(), "EUR", items))
+				.receiveOrder(new CustomerIdentity("it-customer", null, null), new CreateOrderRequest(def.priority(), def.urgent(), "EUR", items))
 				.orderId();
 			orderIdByLabel.put(def.label(), orderId);
 		}

@@ -3,6 +3,7 @@ package com.stock.management.product;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 @Service
@@ -37,6 +38,16 @@ public class ProductService {
 		}
 
 		/**
+		 * Prix unitaire catalogue d'un produit, utilisé par OrderService au moment de la commande.
+		 */
+		@Transactional(readOnly = true)
+		public BigDecimal getUnitPrice(String id) {
+			return productRepository.findById(id)
+				.map(Product::getUnitPrice)
+				.orElseThrow(() -> new ProductNotFoundException("Produit non trouvé avec l'identifiant : " + id));
+		}
+
+		/**
 		 * Crée un nouveau produit catalogue.
 		 */
 		@Transactional
@@ -45,7 +56,7 @@ public class ProductService {
 				throw new ProductAlreadyExistsException("Un produit avec l'ID '" + request.id() + "' existe déjà.");
 			}
 
-			Product product = new Product(request.id(), request.name());
+			Product product = new Product(request.id(), request.name(), request.unitPrice());
 			Product savedProduct = productRepository.save(product);
 
 			return ProductResponse.fromEntity(savedProduct);

@@ -1,5 +1,6 @@
 package com.stock.management.order.domain;
 
+import com.stock.management.customer.Customer;
 import com.stock.management.kafka.event.OrderReceivedEvent;
 import com.stock.management.order.InvalidOrderStateException;
 import com.stock.management.order.LineItemNotFoundException;
@@ -70,6 +71,10 @@ public class CustomerOrder {
     private String currency;
     @Column(name = "received_at", nullable = false, updatable = false)
     private Instant receivedAt;
+	// Identifiant Keycloak du client (claim "sub" du JWT) : stable, jamais modifiable après création.
+	@ManyToOne(fetch = FetchType.LAZY)
+	@JoinColumn(name = "customer_id", nullable = false)
+	private Customer customer;
 
     // Dernière modification — alimenté automatiquement par Hibernate (@PrePersist/@PreUpdate).
     // Sert de signal de fraîcheur pour l'analytique (latence de traitement = updatedAt - receivedAt).
@@ -163,6 +168,31 @@ public class CustomerOrder {
 		}
 
 		return order;
+	}
+
+	/**
+	 * Crée une commande rattachée à un client.
+	 *
+	 * @param customer client du token (Just-In-Time provisioning), jamais une valeur venant du body de la requête
+	 */
+	public static CustomerOrder create(
+		Customer customer,
+		Priority priority,
+		boolean completeDeliveryRequired,
+		String currency,
+		List<LineItemRequest> lineItemRequests) {
+
+		if (customer == null) {
+			throw new IllegalArgumentException("customer must not be null");
+		}
+		CustomerOrder order = create(priority, completeDeliveryRequired, currency, lineItemRequests);
+		order.customer = customer;
+		return order;
+	}
+
+	/** Identifiant Keycloak du client ("sub"), null si la commande n'est rattachée à aucun client. */
+	public String getCustomerId() {
+		return customer != null ? customer.getId() : null;
 	}
 
 	/**

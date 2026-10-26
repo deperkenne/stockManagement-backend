@@ -1,6 +1,7 @@
 package com.stock.management.sku;
 
 import com.stock.management.order.domain.ProductNr;
+import com.stock.management.sku.domain.LocationId;
 import com.stock.management.sku.domain.Sku;
 import com.stock.management.sku.domain.SkuId;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -64,6 +65,14 @@ public interface SkuRepository extends JpaRepository<Sku, SkuId> {
 	@Lock(LockModeType.PESSIMISTIC_WRITE)
 	@Query("SELECT s FROM Sku s WHERE s.id IN :skuIds")
 	List<Sku> findAllByIdWithLock(@Param("skuIds") Set<SkuId> skuIds);
+
+	/** Vrai si un SKU occupe déjà cet emplacement. */
+	@Query("SELECT COUNT(s) > 0 FROM Sku s WHERE s.location.id = :locationId")
+	boolean existsByLocationId(@Param("locationId") LocationId locationId);
+
+	/** Ids de tous les emplacements occupés : une seule requête pour la liste des emplacements (pas de N+1). */
+	@Query("SELECT s.location.id FROM Sku s")
+	List<LocationId> findAllOccupiedLocationIds();
 
 
 }

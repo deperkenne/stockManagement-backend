@@ -5,6 +5,11 @@ import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
+/**
+ * Emplacement physique de l'entrepôt (ex : "A-01").
+ * Agrégat indépendant : il existe avant, pendant et après le stock qu'il contient.
+ * Un Sku le référence, mais ne le possède pas (supprimer un Sku ne supprime pas l'emplacement).
+ */
 @Entity
 @Table(name = "warehouse_locations")
 @Getter
@@ -23,36 +28,39 @@ public class WarehouseLocation {
     @Column(name = "locked_reason")
     private String lockedReason;
 
-    // ─── Factory (package-private — only Sku can create a location) ──────────────
+    // ─── Factory ─────────────────────────────────────────────────────────────────
 
-    static WarehouseLocation create(String code) {
-        if (code == null || code.isBlank()) {
-            throw new IllegalArgumentException("Location code must not be blank");
-        }
+    public static WarehouseLocation create(String code) {
         WarehouseLocation wl = new WarehouseLocation();
         wl.id = LocationId.generate();
-        wl.code = code.trim().toUpperCase();
+        wl.code = normalizeCode(code);
         wl.locked = false;
         return wl;
     }
 
-    // ─── Business methods (package-private — only accessible through Sku) ────────
+    /** Format unique des codes (trim + majuscules) : à utiliser aussi pour toute recherche par code. */
+    public static String normalizeCode(String code) {
+        if (code == null || code.isBlank()) {
+            throw new IllegalArgumentException("Location code must not be blank");
+        }
+        return code.trim().toUpperCase();
+    }
 
-    void lock(String reason) {
+    // ─── Business methods ─────────────────────────────────────────────────────────
+
+    /** Bloque l'emplacement (inventaire, casse...) : son stock n'est plus allouable. */
+    public void lock(String reason) {
         this.locked = true;
         this.lockedReason = reason;
     }
 
-    void unlock() {
+    public void unlock() {
         this.locked = false;
         this.lockedReason = null;
     }
 
-    /** Renomme l'emplacement (utilisé par Sku.updateDetails lors d'un PUT). */
-    void rename(String code) {
-        if (code == null || code.isBlank()) {
-            throw new IllegalArgumentException("Location code must not be blank");
-        }
-        this.code = code.trim().toUpperCase();
+    /** Change l'étiquette de l'emplacement lui-même (ne déplace aucun stock). */
+    public void rename(String code) {
+        this.code = normalizeCode(code);
     }
 }
