@@ -2,9 +2,9 @@ name: CI/CD
 
 on:
   pull_request:  # quand on propose du code
-    branches: [dev,'release/**',main]
+    branches: [dev,'release/**','feature/**',main]
   push: # quand on pousse sur ces branches
-    branches: [dev,'release/**','hotfix/**']
+    branches: [dev,'release/**','hotfix/**','feature/**']
     tags: ['v*']
 
 # Par défaut, le pipeline peut seulement LIRE le code. Chaque étape qui a besoin
