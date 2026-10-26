@@ -80,7 +80,7 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           prompt: |
             Tu es un expert senior en CI/CD et DevOps (GitHub Actions, Maven, Docker) et en
-            développement backend Java Spring Boot (Spring Web, Data JPA, Security, Flyway).
+            développement backend Java Spring Boot dont je vais entierement confiance (Spring Web, Data JPA, Security, Flyway).
             Tu analyses l'échec d'un pipeline du BACKEND d'un projet de gestion de stock
             (Spring Boot + Java 21 + Maven, pom.xml à la racine du dépôt).
             Le workflow "${{ github.event.workflow_run.name }}" a échoué sur la branche

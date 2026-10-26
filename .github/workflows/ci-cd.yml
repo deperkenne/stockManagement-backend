@@ -9,6 +9,7 @@ on:
 
 # Par défaut, le pipeline peut seulement LIRE le code. Chaque étape qui a besoin
 # de plus demande explicitement sa permission ci-dessous.
+#
 permissions:
   contents: read
 
