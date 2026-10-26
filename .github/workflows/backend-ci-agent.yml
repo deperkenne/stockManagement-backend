@@ -385,7 +385,7 @@ jobs:
 
           msg = EmailMessage()
           msg["From"] = "CI Agent <%s>" % user
-          msg["To"] = "tchofodep@gmail.com"
+          msg["To"] = "ktdtchofo@gmail.com"
           msg["Subject"] = "[Backend CI] Intervention requise : échec sur %s" % branch
           body = ("Bonjour,\n\n"
                   "Le pipeline backend a échoué sur la branche %s et la correction ne peut pas être "
