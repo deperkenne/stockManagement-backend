@@ -2,7 +2,7 @@ name: Backend CI agent
 on:
   workflow_run:
     # Noms EXACTS de vos workflows (champ "name:")
-    workflows: ["CI/CD","DeploymentPreproduction","DeploymentStaging"]
+    workflows: ["CI/CD"]
     types: [completed]
 
 permissions:
