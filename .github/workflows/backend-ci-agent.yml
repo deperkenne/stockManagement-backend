@@ -2,7 +2,7 @@ name: Backend CI agent
 on:
   workflow_run:
     # Noms EXACTS de vos workflows (champ "name:")
-    workflows: ["CI/CD"]
+    workflows: ["CI/CD","DeploymentStaging"]
     types: [completed]
 
 permissions:
@@ -372,14 +372,21 @@ jobs:
       - name: E-mail avec le rapport PDF (intervention humaine requise)
         if: always() && steps.guard.outputs.reason != 'duplicate' && steps.decide.outputs.outcome != 'fixed'
         env:
-          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          # Accepte GMAIL_USER créé comme secret OU comme variable (onglet "Variables")
+          GMAIL_USER: ${{ secrets.GMAIL_USER || vars.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
         run: |
           python3 - <<'PY'
-          import os, smtplib, pathlib
+          import os, smtplib, pathlib, sys
           from email.message import EmailMessage
 
-          user, pwd = os.environ["GMAIL_USER"], os.environ["GMAIL_APP_PASSWORD"]
+          user = os.environ.get("GMAIL_USER", "").strip()
+          pwd = os.environ.get("GMAIL_APP_PASSWORD", "").replace(" ", "")
+          missing = [n for n, v in (("GMAIL_USER", user), ("GMAIL_APP_PASSWORD", pwd)) if not v]
+          if missing:
+              print("::error::Secret(s) manquant(s) : %s. A créer dans Settings > Secrets and variables "
+                    "> Actions > Repository secrets." % ", ".join(missing))
+              sys.exit(1)
           branch, url = os.environ["BRANCH"], os.environ["RUN_URL"]
           pdf = pathlib.Path(".ci-agent/rapport-erreur-ci.pdf")
 

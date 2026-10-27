@@ -1,5 +1,6 @@
 package com.stock.management.domain;
 
+import com.stock.management.support.StockTestFixtures;
 import com.stock.management.customer.CustomerIdentity;
 import com.stock.management.allocationLine.AllocationItemRepository;
 import com.stock.management.kafka.config.KafkaTopics;
@@ -49,6 +50,8 @@ public class HandlePriorityBasedAllocationEndToEndIT {
 	private OrderRepository orderRepository;
 	@Autowired
 	private SkuRepository skuRepository;
+	@Autowired
+	private StockTestFixtures fixtures;
 	@Autowired
 	private OrderOutboxRepository outboxRepository;
 	@Autowired
@@ -101,10 +104,11 @@ public class HandlePriorityBasedAllocationEndToEndIT {
 	}
 
 	private List<Sku> createAndSaveSku() {
+		fixtures.products("PROD01", "PROD02", "PROD03");
 		return skuRepository.saveAll(List.of(
-			Sku.create(new ProductNr("PROD01"), new Quantity(90), "WA-01"),
-			Sku.create(new ProductNr("PROD02"), new Quantity(80), "WA-02"),
-			Sku.create(new ProductNr("PROD03"), new Quantity(20), "WA-03")
+			fixtures.sku("PROD01", 90, "WA-01"),
+			fixtures.sku("PROD02", 80, "WA-02"),
+			fixtures.sku("PROD03", 20, "WA-03")
 		));
 	}
 
