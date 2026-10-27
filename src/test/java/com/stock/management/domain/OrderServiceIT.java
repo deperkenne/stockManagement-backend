@@ -1,5 +1,6 @@
 package com.stock.management.domain;
 
+import com.stock.management.support.StockTestFixtures;
 import com.stock.management.customer.CustomerIdentity;
 import com.stock.management.order.OrderOutboxRepository;
 import com.stock.management.order.OrderRepository;
@@ -38,6 +39,9 @@ public class OrderServiceIT {
 	@Autowired
 	private OrderStatusHistoryRepository orderStatusHistoryRepository;
 
+	@Autowired
+	private StockTestFixtures fixtures;
+
 	private CreateOrderRequest createOrderRequest;
 
 	@Test
@@ -47,6 +51,8 @@ public class OrderServiceIT {
 			.when(outboxRepository)
 			.save(any());
 
+		// Le produit doit exister au catalogue : sinon receiveOrder échoue avant l'outbox (ProductNotFoundException)
+		fixtures.products("SKU-1");
 		LineItemRequest item01 = new LineItemRequest("SKU-1", 2, new BigDecimal(200.0));
 		createOrderRequest = new CreateOrderRequest(Priority.HIGH, false, "EUR", List.of(item01));
 

@@ -1,6 +1,7 @@
 package com.stock.management.domain;
 
 
+import com.stock.management.support.StockTestFixtures;
 import com.stock.management.customer.CustomerIdentity;
 import com.stock.management.allocationLine.AllocationItem;
 import com.stock.management.allocationLine.AllocationItemRepository;
@@ -65,6 +66,7 @@ public class CancelLineItemsIT {
 	@Autowired private OrderRepository orderRepository;
 	@Autowired private SkuRepository skuRepository;
 	@Autowired private SkuService skuService;
+	@Autowired private StockTestFixtures fixtures;
 	@Autowired private OrderOutboxRepository outboxRepository;
 	@Autowired private AllocationItemRepository allocationItemRepository;
 
@@ -87,7 +89,7 @@ public class CancelLineItemsIT {
 		outboxRepository.deleteAll();
 		orderRepository.deleteAll();
 		skuRepository.deleteAll();
-		allocationItemRepository.deleteAll();
+		allocationItemRepository.deleteAll();		fixtures.products("PROD01", "PROD02", "PROD03");
 	}
 
 
@@ -360,7 +362,7 @@ public class CancelLineItemsIT {
 
 	private void givenStock(List<SkuStock> stock) {
 		skuService.saveSkus(stock.stream()
-			.map(s -> Sku.create(new ProductNr(s.productNr()), new Quantity(s.quantity()), s.warehouse()))
+			.map(s -> fixtures.sku(s.productNr(), s.quantity(), s.warehouse()))
 			.toList());
 	}
 
